@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') exit(0);
 $apiKey = $_ENV['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY');
 if (empty($apiKey)) $apiKey = "sk-xxxxxx...";
 
-// 讀取前端資料，兼容 cafesJson 與 cafes
+// 讀取前端資料
 $location = $_POST['location'] ?? $_REQUEST['location'] ?? '';
 $cafes_json = $_POST['cafes'] ?? $_POST['cafesJson'] ?? $_REQUEST['cafes'] ?? $_REQUEST['cafesJson'] ?? '';
 $preferences_json = $_POST['preferences'] ?? '[]';
@@ -65,7 +65,7 @@ if($user_lat!==null && $user_lng!==null){
     $filtered_cafes = sortCafesByDistance($filtered_cafes, $user_lat, $user_lng);
 }
 
-// 準備咖啡廳文字清單（小寫 key）
+// 準備咖啡廳文字清單
 $cafe_list="";
 foreach($filtered_cafes as $index=>$cafe){
     $features=[];
@@ -111,10 +111,10 @@ $prompt="你是一個專業旅遊行程規劃師，請生成一日行程 JSON，
 
 請生成 JSON：
 {
-  \"reason\": \"簡述推薦理由，若是地址搜尋請包含『{$location}』，若是捷運搜尋請包含『{$location}站』\",
+  \"reason\": \"請詳細說明推薦的理由，需解釋為何選擇這些咖啡廳或地點，以及這些地點如何符合使用者的風格、時間偏好與偏好條件。若是地址搜尋請包含『{$location}』，若是捷運搜尋請包含『{$location}站』。\",
   \"itinerary\": [
     {
-      \"time\": \"09:00\",
+      \"time\": \"{$startTime}\",
       \"place\": \"XXX 咖啡廳\",
       \"activity\": \"享用早餐咖啡\",
       \"transport\": \"步行 5 分鐘\",
@@ -127,15 +127,15 @@ $prompt="你是一個專業旅遊行程規劃師，請生成一日行程 JSON，
 // 呼叫 OpenAI
 $ai_response = callOpenAI($apiKey, $prompt);
 if($ai_response===false){
-    $fallback_result = generateFallbackItinerary($filtered_cafes,$search_mode,$location,$startTime);
+    $fallback_result = generateFallbackItinerary($filtered_cafes,$search_mode,$location,$startTime,$endTime);
     echo json_encode($fallback_result,JSON_UNESCAPED_UNICODE);
     exit;
 }
 
 // 解析 AI 回應
-$result = parseAIResponseRobust($ai_response);
+$result = parseAIResponseRobust($ai_response, $startTime, $endTime);
 
-// 輸出純 JSON
+// 輸出 JSON
 echo json_encode($result, JSON_UNESCAPED_UNICODE);
 
 
@@ -206,33 +206,55 @@ function callOpenAI($apiKey,$prompt){
     return $data['choices'][0]['message']['content'] ?? false;
 }
 
-function parseAIResponseRobust($ai_response){
+function parseAIResponseRobust($ai_response, $startTime, $endTime){
     $matches=[]; 
     preg_match('/\{.*"itinerary".*\}/s',$ai_response,$matches);
     $result=['reason'=>null,'itinerary'=>[],'raw_text'=>$ai_response];
+
     if(!empty($matches[0])){
         $parsed=json_decode($matches[0],true);
         if($parsed && isset($parsed['itinerary'])){
             $result['reason']=$parsed['reason']??null;
             $result['itinerary']=$parsed['itinerary'];
+
+            // 強制時間限制
+            foreach($result['itinerary'] as &$item){
+                $time = strtotime($item['time']);
+                if($time < strtotime($startTime)) $item['time'] = $startTime;
+                if($time > strtotime($endTime)) $item['time'] = $endTime;
+            }
+            unset($item);
         }
     }
+
     return $result;
 }
 
-function generateFallbackItinerary($cafes,$search_mode,$location,$start){
+function generateFallbackItinerary($cafes,$search_mode,$location,$startTime,$endTime){
     $itinerary=[];
     $cafes_count=count($cafes);
+
     if($cafes_count>0){
         $cafe1=$cafes[rand(0,$cafes_count-1)];
-        $itinerary[]=['time'=>$start,'place'=>$cafe1['name'],'activity'=>'享用早餐咖啡','transport'=>'步行 5 分鐘','period'=>'morning','category'=>'cafe'];
+        $itinerary[]=['time'=>$startTime,'place'=>$cafe1['name'],'activity'=>'享用早餐咖啡','transport'=>'步行 5 分鐘','period'=>'morning','category'=>'cafe'];
     }
+
     if($cafes_count>1){
         $cafe2=$cafes[rand(0,$cafes_count-1)];
         while($cafe2['name']===$cafe1['name']) $cafe2=$cafes[rand(0,$cafes_count-1)];
-        $itinerary[]=['time'=>date('H:i',strtotime($start.' +4 hours')),'place'=>$cafe2['name'],'activity'=>'享用午後咖啡','transport'=>'步行 5 分鐘','period'=>'afternoon','category'=>'cafe'];
+
+        $secondTime = date('H:i', max(strtotime($startTime.' +4 hours'), strtotime($startTime)));
+        if(strtotime($secondTime) > strtotime($endTime)) $secondTime = $endTime;
+
+        $itinerary[]=['time'=>$secondTime,'place'=>$cafe2['name'],'activity'=>'享用午後咖啡','transport'=>'步行 5 分鐘','period'=>'afternoon','category'=>'cafe'];
     }
-    $itinerary[]=['time'=>date('H:i',strtotime($start.' +2 hours')),'place'=>'文創小店','activity'=>'參觀文創小店','transport'=>'步行','period'=>'afternoon','category'=>'spot'];
+
+    $thirdTime = date('H:i', max(strtotime($startTime.' +2 hours'), strtotime($startTime)));
+    if(strtotime($thirdTime) > strtotime($endTime)) $thirdTime = $endTime;
+
+    $itinerary[]=['time'=>$thirdTime,'place'=>'文創小店','activity'=>'參觀文創小店','transport'=>'步行','period'=>'afternoon','category'=>'spot'];
+
     $reason=$search_mode==='transit'?"建議行程以 {$location} 站附近咖啡廳與景點安排":"建議行程以 {$location} 附近咖啡廳與景點安排";
+
     return ['reason'=>$reason,'itinerary'=>$itinerary,'raw_text'=>''];
 }
