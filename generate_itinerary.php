@@ -118,7 +118,9 @@ $prompt="你是一個專業旅遊行程規劃師，請生成一日行程 JSON，
 // 呼叫 OpenAI
 $ai_response = callOpenAI($apiKey, $prompt);
 if($ai_response===false){
-    $result = generateFallbackItinerarySegmented($filtered_cafes,$search_mode,$location,$startTime,$endTime);
+    // 使用 fallback 並套上自動分段
+    $fallback_itinerary = generateFallbackItinerarySegmented($filtered_cafes,$search_mode,$location,$startTime,$endTime);
+    $result = ['reason'=>"AI 服務無法取得，使用 fallback 行程", 'itinerary'=>segmentItineraryByTime($fallback_itinerary,$startTime,$endTime),'raw_text'=>null];
 } else {
     $result = parseAIResponseSegmented($ai_response, $startTime, $endTime);
 }
@@ -194,7 +196,6 @@ function callOpenAI($apiKey,$prompt){
     return $data['choices'][0]['message']['content'] ?? false;
 }
 
-// AI 回應解析，若失敗使用 fallback
 function parseAIResponseSegmented($ai_response,$startTime,$endTime){
     $matches=[]; 
     preg_match('/\{.*"itinerary".*\}/s',$ai_response,$matches);
@@ -203,14 +204,13 @@ function parseAIResponseSegmented($ai_response,$startTime,$endTime){
         $parsed=json_decode($matches[0],true);
         if($parsed && isset($parsed['itinerary'])){
             $result['reason']=$parsed['reason']??"建議行程以附近咖啡廳與景點安排";
-            // 自動分段
             $result['itinerary'] = segmentItineraryByTime($parsed['itinerary'],$startTime,$endTime);
         }
     }
     return $result;
 }
 
-// fallback 行程分段
+// fallback 行程生成
 function generateFallbackItinerarySegmented($cafes,$search_mode,$location,$start,$end){
     $itinerary=[];
     $cafes_count=count($cafes);
@@ -223,4 +223,18 @@ function generateFallbackItinerarySegmented($cafes,$search_mode,$location,$start
         while($cafe2['name']===$cafe1['name']) $cafe2=$cafes[rand(0,$cafes_count-1)];
         $itinerary[]=['time'=>date('H:i',strtotime($start.' +4 hours')),'place'=>$cafe2['name'],'activity'=>'享用午後咖啡','transport'=>'步行 5 分鐘','period'=>'afternoon','category'=>'cafe'];
     }
-    $itinerary[]=['time'=>date('H:i',strtotime($start.' +2 hours')),'place
+    // 可自行添加自由活動
+    $itinerary[]=['time'=>date('H:i',strtotime($start.' +2 hours')),'place'=>'自由活動','activity'=>'探索周邊景點','transport'=>'步行或大眾運輸','period'=>'morning','category'=>'sightseeing'];
+    return $itinerary;
+}
+
+// 將行程分段（上午/下午/晚間）範例
+function segmentItineraryByTime($itinerary,$startTime,$endTime){
+    foreach($itinerary as &$item){
+        $hour=(int)substr($item['time'],0,2);
+        if($hour<12) $item['period']='morning';
+        elseif($hour<18) $item['period']='afternoon';
+        else $item['period']='evening';
+    }
+    return $itinerary;
+}
