@@ -4,75 +4,69 @@ header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
-// 關閉 PHP 警告
 error_reporting(0);
 ini_set('display_errors', 0);
 
 if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') exit(0);
 
-// OpenAI API Key
-$apiKey = $_ENV['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY');
-if (empty($apiKey)) $apiKey = "sk-xxxxxx...";
-
-// 讀取前端資料
+// ------------------- 讀取參數 -------------------
 $location = $_POST['location'] ?? $_REQUEST['location'] ?? '';
-$cafes_json = $_POST['cafes'] ?? $_POST['cafesJson'] ?? $_REQUEST['cafes'] ?? $_REQUEST['cafesJson'] ?? '';
+$search_mode = $_POST['search_mode'] ?? $_REQUEST['search_mode'] ?? 'address'; // 'address' or 'transit'
 $preferences_json = $_POST['preferences'] ?? '[]';
 $style_preference = $_POST['style'] ?? $_REQUEST['style'] ?? '文青';
 $time_preference = $_POST['time_preference'] ?? $_REQUEST['time_preference'] ?? '標準';
-$user_goals_json = $_POST['user_goals'] ?? '[]';  
-$search_mode = $_POST['search_mode'] ?? $_REQUEST['search_mode'] ?? 'address';
+$user_goals_json = $_POST['user_goals'] ?? '[]';
 $user_lat = $_POST['latitude'] ?? $_REQUEST['latitude'] ?? null;  
 $user_lng = $_POST['longitude'] ?? $_REQUEST['longitude'] ?? null;
 
-// 必要參數檢查
-if (empty($location) || empty($cafes_json)) {
-    echo json_encode([
-        'reason'=>null,
-        'itinerary'=>null,
-        'raw_text'=>'缺少必要參數 (location 或 cafes)',
-        'error'=>'缺少必要參數'
-    ], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-// JSON 解析
-$cafes = json_decode($cafes_json,true);
 $preferences = json_decode($preferences_json,true);
 $user_goals = json_decode($user_goals_json,true);
 
-if(json_last_error()!==JSON_ERROR_NONE || empty($cafes)){
-    echo json_encode([
-        'reason'=>null,
-        'itinerary'=>null,
-        'raw_text'=>'咖啡廳資料解析失敗或為空',
-        'error'=>'JSON 解析錯誤'
-    ], JSON_UNESCAPED_UNICODE);
-    exit;
+// ------------------- 載入咖啡廳資料 -------------------
+$cafes = $_POST['cafes'] ?? $_REQUEST['cafes'] ?? null;
+
+include_once __DIR__.'/get_cafes_by_mrt.php';
+include_once __DIR__.'/get_cafes_by_location.php';
+
+if(empty($cafes)){
+    if($search_mode==='transit'){
+        $cafes = getCafesByMRT($location);
+    } else {
+        $cafes = getCafesByLocation($location);
+    }
 }
 
-// 篩選咖啡廳
-$filtered_cafes = filterCafesByPreferences($cafes, $preferences);
-if(empty($filtered_cafes)) $filtered_cafes=$cafes;
+// ------------------- 篩選咖啡廳 -------------------
+$cafes = filterCafesByPreferences($cafes,$preferences);
 
-// 時間設定
+// 若沒有符合偏好的，保留原始列表
+if(empty($cafes)){
+    if($search_mode==='transit'){
+        $cafes = getCafesByMRT($location);
+    } else {
+        $cafes = getCafesByLocation($location);
+    }
+}
+
+// ------------------- 時間設定 -------------------
 $timeSettings=["早鳥"=>["start"=>"09:00","end"=>"18:00"],"標準"=>["start"=>"10:00","end"=>"20:00"],"夜貓"=>["start"=>"13:00","end"=>"23:00"]];
 $startTime = $timeSettings[$time_preference]["start"] ?? "10:00";
 $endTime = $timeSettings[$time_preference]["end"] ?? "20:00";
 
-// 按距離排序
+// ------------------- 按距離排序 -------------------
 if($user_lat!==null && $user_lng!==null){
-    $filtered_cafes = sortCafesByDistance($filtered_cafes, $user_lat, $user_lng);
+    $cafes = sortCafesByDistance($cafes, $user_lat, $user_lng);
 }
 
-// 準備咖啡廳文字清單
+// ------------------- 準備咖啡廳文字清單 -------------------
 $cafe_list="";
-foreach($filtered_cafes as $index=>$cafe){
+foreach($cafes as $index=>$cafe){
     $features=[];
     if(isset($cafe['wifi']) && $cafe['wifi']==='1') $features[]='WiFi';
     if(isset($cafe['socket']) && $cafe['socket']==='1') $features[]='插座';
     if(isset($cafe['quiet']) && $cafe['quiet']==='1') $features[]='安靜';
     if(isset($cafe['limited_time']) && $cafe['limited_time']==='0') $features[]='不限時';
+    if(isset($cafe['pet_friendly']) && $cafe['pet_friendly']==='1') $features[]='寵物友善';
     $cafe_list .= ($index+1).". ".$cafe['name']."\n";
     $cafe_list .= "   地址: ".($cafe['address'] ?? '未知')."\n";
     if(!empty($cafe['mrt'])) $cafe_list .= "   捷運: ".$cafe['mrt']."\n";
@@ -80,7 +74,7 @@ foreach($filtered_cafes as $index=>$cafe){
     $cafe_list .= "\n";
 }
 
-// 偏好文字
+// ------------------- 使用者偏好文字 -------------------
 $preference_text="";
 if(!empty($preferences)){
     $pref_map=['quiet'=>'安靜環境','socket'=>'有插座','no_time_limit'=>'不限時','wifi'=>'WiFi','pet_friendly'=>'寵物友善'];
@@ -89,16 +83,17 @@ if(!empty($preferences)){
     if(!empty($pref_texts)) $preference_text="用戶偏好: ".implode('、',$pref_texts)."\n";
 }
 
-// 旅遊目的文字
+// ------------------- 旅遊目的文字 -------------------
 $user_goal_text="";
 if(!empty($user_goals)){
     $user_goal_text="旅遊目的/偏好型: ".implode('、',$user_goals)."\n";
 }
 
-// 搜尋資訊
+// ------------------- 搜尋資訊文字 -------------------
 $search_info=$search_mode==='transit'?"以捷運站「{$location}」為中心":"在「{$location}」地區";
 
-// GPT Prompt
+// ------------------- GPT Prompt -------------------
+$apiKey = $_ENV['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY') ?? "sk-xxxxxx...";
 $prompt="你是一個專業旅遊行程規劃師，請生成一日行程 JSON，上午安排1間咖啡廳，下午1間咖啡廳，其他時間安排與使用者偏好/活動風格相關的場所。
 規劃地點：{$search_info}
 {$preference_text}
@@ -115,21 +110,22 @@ $prompt="你是一個專業旅遊行程規劃師，請生成一日行程 JSON，
   \"itinerary\": []
 }";
 
-// 呼叫 OpenAI
+// ------------------- 呼叫 OpenAI -------------------
 $ai_response = callOpenAI($apiKey, $prompt);
 if($ai_response===false){
-    // 使用 fallback 並套上自動分段
-    $fallback_itinerary = generateFallbackItinerarySegmented($filtered_cafes,$search_mode,$location,$startTime,$endTime);
+    $fallback_itinerary = generateFallbackItinerarySegmented($cafes,$search_mode,$location,$startTime,$endTime);
     $result = ['reason'=>"AI 服務無法取得，使用 fallback 行程", 'itinerary'=>segmentItineraryByTime($fallback_itinerary,$startTime,$endTime),'raw_text'=>null];
 } else {
-    $result = parseAIResponseSegmented($ai_response, $startTime, $endTime);
+    $result = parseAIResponseSegmented($ai_response,$startTime,$endTime);
 }
 
-// 輸出 JSON
+// ------------------- 輸出 JSON -------------------
 echo json_encode($result, JSON_UNESCAPED_UNICODE);
 
 
 /* ------------------- 函數區 ------------------- */
+
+// 篩選偏好咖啡廳
 function filterCafesByPreferences($cafes,$preferences){
     if(empty($preferences)) return $cafes;
     $filtered=[];
@@ -151,6 +147,7 @@ function filterCafesByPreferences($cafes,$preferences){
     return $filtered;
 }
 
+// 按距離排序
 function sortCafesByDistance($cafes,$lat,$lng){
     foreach($cafes as &$cafe){
         if(isset($cafe['latitude']) && isset($cafe['longitude'])){
@@ -162,6 +159,7 @@ function sortCafesByDistance($cafes,$lat,$lng){
     return $cafes;
 }
 
+// 計算兩點距離
 function haversine($lat1,$lng1,$lat2,$lng2){
     $earth_radius = 6371;
     $dLat = deg2rad($lat2-$lat1);
@@ -171,6 +169,7 @@ function haversine($lat1,$lng1,$lat2,$lng2){
     return $earth_radius * $c;
 }
 
+// 呼叫 OpenAI
 function callOpenAI($apiKey,$prompt){
     if(empty($apiKey) || $apiKey==="sk-xxxxxx...") return false;
     $ch = curl_init();
@@ -196,6 +195,7 @@ function callOpenAI($apiKey,$prompt){
     return $data['choices'][0]['message']['content'] ?? false;
 }
 
+// 解析 AI 回應
 function parseAIResponseSegmented($ai_response,$startTime,$endTime){
     $matches=[]; 
     preg_match('/\{.*"itinerary".*\}/s',$ai_response,$matches);
@@ -210,7 +210,7 @@ function parseAIResponseSegmented($ai_response,$startTime,$endTime){
     return $result;
 }
 
-// fallback 行程生成
+// fallback 行程
 function generateFallbackItinerarySegmented($cafes,$search_mode,$location,$start,$end){
     $itinerary=[];
     $cafes_count=count($cafes);
@@ -223,12 +223,11 @@ function generateFallbackItinerarySegmented($cafes,$search_mode,$location,$start
         while($cafe2['name']===$cafe1['name']) $cafe2=$cafes[rand(0,$cafes_count-1)];
         $itinerary[]=['time'=>date('H:i',strtotime($start.' +4 hours')),'place'=>$cafe2['name'],'activity'=>'享用午後咖啡','transport'=>'步行 5 分鐘','period'=>'afternoon','category'=>'cafe'];
     }
-    // 可自行添加自由活動
     $itinerary[]=['time'=>date('H:i',strtotime($start.' +2 hours')),'place'=>'自由活動','activity'=>'探索周邊景點','transport'=>'步行或大眾運輸','period'=>'morning','category'=>'sightseeing'];
     return $itinerary;
 }
 
-// 將行程分段（上午/下午/晚間）範例
+// 分段上午/下午/晚間
 function segmentItineraryByTime($itinerary,$startTime,$endTime){
     foreach($itinerary as &$item){
         $hour=(int)substr($item['time'],0,2);
@@ -238,3 +237,4 @@ function segmentItineraryByTime($itinerary,$startTime,$endTime){
     }
     return $itinerary;
 }
+?>
