@@ -23,17 +23,13 @@ $preferences = json_decode($preferences_json,true);
 $user_goals = json_decode($user_goals_json,true);
 
 // ------------------- 載入咖啡廳資料 -------------------
-$cafes = $_POST['cafes'] ?? $_REQUEST['cafes'] ?? null;
-
 include_once __DIR__.'/get_cafes_by_mrt.php';
 include_once __DIR__.'/get_cafes_by_location.php';
 
-if(empty($cafes)){
-    if($search_mode==='transit'){
-        $cafes = getCafesByMRT($location);
-    } else {
-        $cafes = getCafesByLocation($location);
-    }
+if ($search_mode === 'transit') {
+    $cafes = getCafesByMRT($location);
+} else {
+    $cafes = getCafesByLocation($location);
 }
 
 // ------------------- 篩選咖啡廳 -------------------
@@ -69,6 +65,7 @@ foreach($cafes as $index=>$cafe){
     if(isset($cafe['pet_friendly']) && $cafe['pet_friendly']==='1') $features[]='寵物友善';
     $cafe_list .= ($index+1).". ".$cafe['name']."\n";
     $cafe_list .= "   地址: ".($cafe['address'] ?? '未知')."\n";
+    // 只有在有捷運資料時才顯示
     if(!empty($cafe['mrt'])) $cafe_list .= "   捷運: ".$cafe['mrt']."\n";
     if(!empty($features)) $cafe_list .= "   特色: ".implode('、',$features)."\n";
     $cafe_list .= "\n";
@@ -121,7 +118,6 @@ if($ai_response===false){
 
 // ------------------- 輸出 JSON -------------------
 echo json_encode($result, JSON_UNESCAPED_UNICODE);
-
 
 /* ------------------- 函數區 ------------------- */
 
