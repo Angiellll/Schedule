@@ -19,19 +19,27 @@ if ($cafes === null) {
 
 // 取得搜尋條件
 $searchMode = isset($_GET['search_mode']) ? $_GET['search_mode'] : 'address';
-$city = isset($_GET['city']) ? $_GET['city'] : null;
-$district = isset($_GET['district']) ? $_GET['district'] : null;
+$city = isset($_GET['city']) ? $_GET['city'] : null;       // "taipei" 或 "newtaipei"
+$district = isset($_GET['district']) ? $_GET['district'] : null; // 中文區域，例如 "士林區"
 $road = isset($_GET['road']) ? $_GET['road'] : null;
 $mrt = isset($_GET['mrt']) ? $_GET['mrt'] : null;
 $preferences = isset($_GET['preferences']) ? explode(',', $_GET['preferences']) : [];
 
+// 將中文城市對應到 JSON 中的 city 欄位
+$cityMap = [
+    '台北市' => 'taipei',
+    '新北市' => 'xinbei'
+];
+
 // 過濾 JSON 資料
-$filtered = array_filter($cafes, function($cafe) use ($searchMode, $city, $district, $road, $mrt, $preferences) {
+$filtered = array_filter($cafes, function($cafe) use ($searchMode, $city, $district, $road, $mrt, $preferences, $cityMap) {
+
+    // 城市篩選
+    if ($city && isset($cityMap[$city]) && $cafe['city'] !== $cityMap[$city]) return false;
 
     // 搜尋模式：地址
     if ($searchMode === 'address') {
-        if ($city && $cafe['city'] !== $city) return false;
-        if ($district && (!isset($cafe['district']) || $cafe['district'] !== $district)) return false;
+        if ($district && stripos($cafe['address'], $district) === false) return false;
         if ($road && stripos($cafe['address'], $road) === false) return false;
     }
 
