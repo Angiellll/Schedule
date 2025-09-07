@@ -19,18 +19,11 @@ if (is_string($preferences)) $preferences = explode(',', $preferences);
 
 // ------------------- 讀取 JSON -------------------
 $jsonFile = __DIR__ . '/cafes.json';
-if (!file_exists($jsonFile)) {
-    $cafes = [];
-    if (basename($_SERVER['PHP_SELF']) === 'search_mode.php') echo json_encode(['error' => 'cafes.json not found'], JSON_UNESCAPED_UNICODE);
-    return;
-}
-
-$jsonData = file_get_contents($jsonFile);
-$cafes = json_decode($jsonData, true);
-if ($cafes === null) {
-    $cafes = [];
-    if (basename($_SERVER['PHP_SELF']) === 'search_mode.php') echo json_encode(['error' => 'Invalid JSON'], JSON_UNESCAPED_UNICODE);
-    return;
+$cafes = [];
+if (file_exists($jsonFile)) {
+    $jsonData = file_get_contents($jsonFile);
+    $cafes = json_decode($jsonData, true);
+    if ($cafes === null) $cafes = [];
 }
 
 // ------------------- 過濾咖啡廳 -------------------
@@ -69,3 +62,6 @@ if (basename($_SERVER['PHP_SELF']) === 'search_mode.php') {
     echo json_encode(['cafes' => $cafes], JSON_UNESCAPED_UNICODE);
     exit;
 }
+
+// 返回 $cafes 給 include 的程式使用
+return $cafes;
