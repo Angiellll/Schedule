@@ -26,14 +26,26 @@ $user_lng = $_POST['longitude'] ?? $_REQUEST['longitude'] ?? null;
 $searchModeParam = ($search_mode==='mrt') ? 'mrt' : 'address';
 $searchQuery = http_build_query([
     'search_mode' => $searchModeParam,
-    'city' => $location,       // 若 location 是城市名稱
-    'district' => $location,   // 若 location 是區域
+    'city' => $location,
+    'district' => $location,
     'mrt' => $location,
     'preferences' => implode(',', $preferences)
 ]);
 
-$searchUrl = __DIR__.'/search_mode.php?'.$searchQuery;
+// ✅ 用 HTTP URL，而不是 __DIR__
+$baseUrl = "https://schedule-5axo.onrender.com/search_mode.php";
+$searchUrl = $baseUrl . '?' . $searchQuery;
 $searchResponse = file_get_contents($searchUrl);
+
+// 檢查是否成功，避免回傳 HTML
+if ($searchResponse === false) {
+    echo json_encode([
+        "reason" => "search_mode.php 無法呼叫",
+        "itinerary" => []
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 $cafesData = json_decode($searchResponse,true);
 $cafes = $cafesData['cafes'] ?? [];
 
