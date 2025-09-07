@@ -10,7 +10,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') exit(0);
 
 // ------------------- 讀取參數 -------------------
 $location = $_POST['location'] ?? $_REQUEST['location'] ?? '';
-$search_mode = $_POST['search_mode'] ?? $_REQUEST['search_mode'] ?? 'address'; // 'address' or 'mrt'
+$search_mode = $_POST['search_mode'] ?? $_REQUEST['search_mode'] ?? 'address';
 $preferences = $_POST['preferences'] ?? $_REQUEST['preferences'] ?? [];
 if (is_string($preferences)) $preferences = json_decode($preferences,true) ?? explode(',', $preferences);
 
@@ -23,29 +23,21 @@ $user_lat = $_POST['latitude'] ?? $_REQUEST['latitude'] ?? null;
 $user_lng = $_POST['longitude'] ?? $_REQUEST['longitude'] ?? null;
 
 // ------------------- include search_mode.php -------------------
-$searchModeParam = ($search_mode==='mrt') ? 'mrt' : 'address';
-$_GET['search_mode'] = $searchModeParam;
-$_GET['city'] = $location;
-$_GET['district'] = $location;
-$_GET['mrt'] = $location;
-$_GET['preferences'] = implode(',', $preferences);
+$_POST['search_mode'] = $search_mode;
+$_POST['city'] = $location;
+$_POST['district'] = $location;
+$_POST['mrt'] = $location;
+$_POST['preferences'] = implode(',', $preferences);
 
 $searchModePath = __DIR__ . '/search_mode.php';
 if(!file_exists($searchModePath)){
-    echo json_encode([
-        "reason"=>"search_mode.php 不存在",
-        "itinerary"=>[]
-    ], JSON_UNESCAPED_UNICODE);
+    echo json_encode(["reason"=>"search_mode.php 不存在","itinerary"=>[]], JSON_UNESCAPED_UNICODE);
     exit;
 }
-
-include($searchModePath); // 假設 $cafes 會被產生
+include($searchModePath);
 
 if (!isset($cafes) || !is_array($cafes)) {
-    echo json_encode([
-        "reason" => "search_mode.php 未正確生成咖啡廳資料",
-        "itinerary" => []
-    ], JSON_UNESCAPED_UNICODE);
+    echo json_encode(["reason"=>"search_mode.php 未正確生成咖啡廳資料","itinerary"=>[]], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -233,4 +225,3 @@ function segmentItineraryByTime($itinerary,$startTime,$endTime){
     }
     return $itinerary;
 }
-?>
