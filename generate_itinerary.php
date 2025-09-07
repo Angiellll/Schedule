@@ -1,10 +1,11 @@
 <?php
-// 允許跨域
+// ------------------- 基本設定 -------------------
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit(0);
+
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
@@ -22,6 +23,10 @@ if (is_string($user_goals)) $user_goals = json_decode($user_goals,true) ?? explo
 $user_lat = $_POST['latitude'] ?? $_GET['latitude'] ?? null;  
 $user_lng = $_POST['longitude'] ?? $_GET['longitude'] ?? null;
 
+error_log("[Log] location={$location}, search_mode={$search_mode}, preferences=".json_encode($preferences));
+error_log("[Log] style={$style_preference}, time_preference={$time_preference}, user_goals=".json_encode($user_goals));
+error_log("[Log] user_lat={$user_lat}, user_lng={$user_lng}");
+
 // ------------------- include search_mode.php -------------------
 $searchModeParam = ($search_mode==='mrt') ? 'mrt' : 'address';
 $searchParams = [
@@ -36,30 +41,31 @@ $searchParams = [
 $_GET = $_GET + $searchParams;
 $_POST = $_POST + $searchParams;
 
-// include 並取得 $cafes
 $searchModePath = __DIR__ . '/search_mode.php';
 if(!file_exists($searchModePath)){
-    echo json_encode([
-        "reason"=>"search_mode.php 不存在",
-        "itinerary"=>[]
-    ], JSON_UNESCAPED_UNICODE);
+    error_log("[Log] search_mode.php 不存在");
+    echo json_encode(["reason"=>"search_mode.php 不存在","itinerary"=>[]], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
 $cafes = include($searchModePath);
 if (!is_array($cafes)) $cafes = [];
+error_log("[Log] 取得咖啡廳數量: ".count($cafes));
 
 // ------------------- 篩選咖啡廳 -------------------
 $cafes = filterCafesByPreferences($cafes, $preferences);
+error_log("[Log] 篩選後咖啡廳數量: ".count($cafes));
 
 // ------------------- 時間設定 -------------------
 $timeSettings = ["早鳥"=>["start"=>"09:00","end"=>"18:00"], "標準"=>["start"=>"10:00","end"=>"20:00"], "夜貓"=>["start"=>"13:00","end"=>"23:00"]];
 $startTime = $timeSettings[$time_preference]["start"] ?? "10:00";
 $endTime = $timeSettings[$time_preference]["end"] ?? "20:00";
+error_log("[Log] startTime={$startTime}, endTime={$endTime}");
 
 // ------------------- 按距離排序 -------------------
 if ($user_lat !== null && $user_lng !== null) {
     $cafes = sortCafesByDistance($cafes, $user_lat, $user_lng);
+    error_log("[Log] 已按距離排序咖啡廳");
 }
 
 // ------------------- 準備咖啡廳文字清單 -------------------
@@ -96,6 +102,8 @@ $search_info = $search_mode==='mrt' ? "以捷運站「{$location}」為中心" :
 
 // ------------------- GPT Prompt -------------------
 $apiKey = $_ENV['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY') ?? "sk-xxxxxx...";
+error_log("[Log] API Key 使用狀態: ".($apiKey==="sk-xxxxxx..." ? "未設定" : "已設定"));
+
 $prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON，上午安排1間咖啡廳，下午1間咖啡廳，其他時間安排與使用者偏好/活動風格相關的場所。
 規劃地點：{$search_info}
 {$preference_text}
@@ -115,6 +123,7 @@ $prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON�
 // ------------------- 呼叫 OpenAI -------------------
 $ai_response = callOpenAI($apiKey, $prompt);
 if ($ai_response === false) {
+    error_log("[Log] AI 服務無法取得，使用 fallback 行程");
     $fallback_itinerary = generateFallbackItinerarySegmented($cafes, $search_mode, $location, $startTime, $endTime);
     $result = [
         'reason' => "AI 服務無法取得，使用 fallback 行程",
@@ -122,7 +131,9 @@ if ($ai_response === false) {
         'raw_text' => null
     ];
 } else {
+    error_log("[Log] AI 回應成功");
     $result = parseAIResponseSegmented($ai_response, $startTime, $endTime);
+    error_log("[Log] 解析後結果: ".print_r($result,true));
 }
 
 // ------------------- 輸出 JSON -------------------
@@ -169,7 +180,10 @@ function haversine($lat1,$lng1,$lat2,$lng2){
 }
 
 function callOpenAI($apiKey, $prompt){
-    if(empty($apiKey) || $apiKey==="sk-xxxxxx...") return false;
+    if(empty($apiKey) || $apiKey==="sk-xxxxxx...") {
+        error_log("[OpenAI] API Key 無效或未設定");
+        return false;
+    }
     $ch = curl_init();
     curl_setopt_array($ch,[
         CURLOPT_URL => "https://api.openai.com/v1/chat/completions",
@@ -186,11 +200,22 @@ function callOpenAI($apiKey, $prompt){
     ]);
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch,CURLINFO_HTTP_CODE);
-    if(curl_errno($ch)){curl_close($ch); return false;}
+    if(curl_errno($ch)){
+        error_log("[OpenAI] cURL 錯誤: ".curl_error($ch));
+        curl_close($ch);
+        return false;
+    }
     curl_close($ch);
+    error_log("[OpenAI] HTTP code: ".$http_code);
+    error_log("[OpenAI] raw response: ".$response);
     if($http_code!==200) return false;
     $data=json_decode($response,true);
-    return $data['choices'][0]['message']['content'] ?? false;
+    if(!$data || !isset($data['choices'][0]['message']['content'])){
+        error_log("[OpenAI] JSON 解析失敗或缺少 content");
+        return false;
+    }
+    error_log("[OpenAI] AI 回應內容: ".$data['choices'][0]['message']['content']);
+    return $data['choices'][0]['message']['content'];
 }
 
 function parseAIResponseSegmented($ai_response,$startTime,$endTime){
