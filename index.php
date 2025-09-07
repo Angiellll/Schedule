@@ -1,18 +1,33 @@
 <?php
 // index.php
 
-// 簡單首頁回應
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($_SERVER['REQUEST_URI'] === '/' || $_SERVER['REQUEST_URI'] === '/index.php')) {
-    echo "Caffinder PHP API is running!";
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type");
+header("Content-Type: application/json; charset=UTF-8");
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    exit(0);
+}
+
+// 取得 API Key
+$apiKey = getenv("OPENAI_API_KEY");
+if (!$apiKey) {
+    echo json_encode(["success" => false, "error" => "API Key 未設定"]);
     exit;
 }
 
-// 如果是 /test_ai，就測試 AI API
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && $_SERVER['REQUEST_URI'] === '/test_ai') {
+// 根據路由處理請求
+$uri = $_SERVER['REQUEST_URI'];
 
-    header("Content-Type: application/json");
+// 根目錄 /index.php
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($uri === '/' || $uri === '/index.php')) {
+    echo json_encode(["success" => true, "message" => "Caffinder PHP API is running!"]);
+    exit;
+}
 
-    $apiKey = "你的_API_KEY";  // <- 替換成你的 OpenAI Key
+// /test_ai 路由
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && $uri === '/test_ai') {
 
     $requestData = [
         "location" => "台北市中正區",
@@ -24,11 +39,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $_SERVER['REQUEST_URI'] === '/test_a
         "search_mode" => "address"
     ];
 
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, "https://api.openai.com/v1/chat/completions");
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-
     $payload = [
         "model" => "gpt-3.5-turbo",
         "messages" => [
@@ -38,11 +48,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $_SERVER['REQUEST_URI'] === '/test_a
         "temperature" => 0.7
     ];
 
+    $ch = curl_init("https://api.openai.com/v1/chat/completions");
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_FAILONERROR, true);
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         "Content-Type: application/json",
         "Authorization: Bearer $apiKey"
     ]);
-
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
 
     $response = curl_exec($ch);
@@ -52,11 +65,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $_SERVER['REQUEST_URI'] === '/test_a
     if ($err) {
         echo json_encode(["success" => false, "error" => $err]);
     } else {
-        echo $response;
+        $data = json_decode($response, true);
+        echo json_encode(["success" => true, "data" => $data]);
     }
-
     exit;
 }
 
-// 其他路由可以在這裡處理
-echo "路由不存在或未實作";
+// 其他未實作路由
+echo json_encode(["success" => false, "error" => "路由不存在或未實作"]);
