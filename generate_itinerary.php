@@ -22,44 +22,36 @@ if (is_string($user_goals)) $user_goals = json_decode($user_goals,true) ?? explo
 $user_lat = $_POST['latitude'] ?? $_REQUEST['latitude'] ?? null;  
 $user_lng = $_POST['longitude'] ?? $_REQUEST['longitude'] ?? null;
 
-// ------------------- 從 search_mode.php 取得咖啡廳 -------------------
+// ------------------- include search_mode.php -------------------
 $searchModeParam = ($search_mode==='mrt') ? 'mrt' : 'address';
-$searchQuery = http_build_query([
-    'search_mode' => $searchModeParam,
-    'city' => $location,
-    'district' => $location,
-    'mrt' => $location,
-    'preferences' => implode(',', $preferences)
-]);
+$_GET['search_mode'] = $searchModeParam;
+$_GET['city'] = $location;
+$_GET['district'] = $location;
+$_GET['mrt'] = $location;
+$_GET['preferences'] = implode(',', $preferences);
 
-$baseUrl = "https://schedule-5axo.onrender.com/search_mode.php";
-$searchUrl = $baseUrl . '?' . $searchQuery;
-
-// 使用 curl 取得資料
-$ch = curl_init();
-curl_setopt_array($ch, [
-    CURLOPT_URL => $searchUrl,
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_TIMEOUT => 10
-]);
-$searchResponse = curl_exec($ch);
-$http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-curl_close($ch);
-
-if ($searchResponse === false || $http_code != 200) {
+$searchModePath = __DIR__ . '/search_mode.php';
+if(!file_exists($searchModePath)){
     echo json_encode([
-        "reason" => "search_mode.php 無法呼叫",
+        "reason"=>"search_mode.php 不存在",
+        "itinerary"=>[]
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+include($searchModePath); // 假設 $cafes 會被產生
+
+if (!isset($cafes) || !is_array($cafes)) {
+    echo json_encode([
+        "reason" => "search_mode.php 未正確生成咖啡廳資料",
         "itinerary" => []
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-$cafesData = json_decode($searchResponse,true);
-$cafes = $cafesData['cafes'] ?? [];
-
 // ------------------- 篩選咖啡廳 -------------------
 $cafes = filterCafesByPreferences($cafes, $preferences);
-if (empty($cafes)) $cafes = $cafesData['cafes'] ?? [];
+if (empty($cafes)) $cafes = $cafes ?? [];
 
 // ------------------- 時間設定 -------------------
 $timeSettings = ["早鳥"=>["start"=>"09:00","end"=>"18:00"], "標準"=>["start"=>"10:00","end"=>"20:00"], "夜貓"=>["start"=>"13:00","end"=>"23:00"]];
