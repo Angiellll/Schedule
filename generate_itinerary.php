@@ -33,7 +33,7 @@ $searchQuery = http_build_query([
 ]);
 
 // ✅ 用 HTTP URL，而不是 __DIR__
-$baseUrl = "https://schedule-5axo.onrender.com/search_mode.php";
+$baseUrl = "https://schedule-5axo.onrender.com/Schedule/search_mode.php";
 $searchUrl = $baseUrl . '?' . $searchQuery;
 $searchResponse = file_get_contents($searchUrl);
 
