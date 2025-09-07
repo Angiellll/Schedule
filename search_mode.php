@@ -1,48 +1,51 @@
 <?php
-header('Content-Type: application/json; charset=utf-8');
+// 允許跨域
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type');
 
-// cafes.json 路徑
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit(0);
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+// ------------------- 讀取參數 -------------------
+$searchMode = $_POST['search_mode'] ?? $_GET['search_mode'] ?? 'address';
+$city = $_POST['city'] ?? $_GET['city'] ?? null;
+$district = $_POST['district'] ?? $_GET['district'] ?? null;
+$road = $_POST['road'] ?? $_GET['road'] ?? null;
+$mrt = $_POST['mrt'] ?? $_GET['mrt'] ?? null;
+$preferences = $_POST['preferences'] ?? $_GET['preferences'] ?? [];
+if (is_string($preferences)) $preferences = explode(',', $preferences);
+
+// ------------------- 讀取 JSON -------------------
 $jsonFile = __DIR__ . '/cafes.json';
-
-// 讀取 JSON
 if (!file_exists($jsonFile)) {
-    echo json_encode(['error' => 'cafes.json not found']);
-    exit;
+    $cafes = [];
+    if (basename($_SERVER['PHP_SELF']) === 'search_mode.php') echo json_encode(['error' => 'cafes.json not found'], JSON_UNESCAPED_UNICODE);
+    return;
 }
 
 $jsonData = file_get_contents($jsonFile);
 $cafes = json_decode($jsonData, true);
 if ($cafes === null) {
-    echo json_encode(['error' => 'Invalid JSON']);
-    exit;
+    $cafes = [];
+    if (basename($_SERVER['PHP_SELF']) === 'search_mode.php') echo json_encode(['error' => 'Invalid JSON'], JSON_UNESCAPED_UNICODE);
+    return;
 }
 
-// 取得搜尋條件
-$searchMode = isset($_GET['search_mode']) ? $_GET['search_mode'] : 'address';
-$city = isset($_GET['city']) ? $_GET['city'] : null;       // taipei / xinbei
-$district = isset($_GET['district']) ? $_GET['district'] : null; // 中文區域，例如 "士林區"
-$road = isset($_GET['road']) ? $_GET['road'] : null;
-$mrt = isset($_GET['mrt']) ? $_GET['mrt'] : null;
-$preferences = isset($_GET['preferences']) ? explode(',', $_GET['preferences']) : [];
-
-// 過濾 JSON 資料
-$filtered = array_filter($cafes, function($cafe) use ($searchMode, $city, $district, $road, $mrt, $preferences) {
-
-    // 城市篩選
+// ------------------- 過濾咖啡廳 -------------------
+$cafes = array_filter($cafes, function($cafe) use ($searchMode, $city, $district, $road, $mrt, $preferences) {
     if ($city && isset($cafe['city']) && $cafe['city'] !== $city) return false;
 
-    // 搜尋模式：地址
     if ($searchMode === 'address') {
         if ($district && stripos($cafe['address'], $district) === false) return false;
         if ($road && stripos($cafe['address'], $road) === false) return false;
     }
 
-    // 搜尋模式：捷運
     if ($searchMode === 'mrt') {
         if ($mrt && (!isset($cafe['mrt']) || stripos($cafe['mrt'], $mrt) === false)) return false;
     }
 
-    // 偏好篩選 (英文 key 對應 generate_itinerary.php)
     foreach ($preferences as $pref) {
         $pref = trim($pref);
         if ($pref === 'wifi' && (!isset($cafe['wifi']) || $cafe['wifi'] != "1")) return false;
@@ -57,5 +60,12 @@ $filtered = array_filter($cafes, function($cafe) use ($searchMode, $city, $distr
     return true;
 });
 
-// 回傳結果
-echo json_encode(['cafes' => array_values($filtered)], JSON_UNESCAPED_UNICODE);
+// 重新索引
+$cafes = array_values($cafes);
+
+// ------------------- 直接訪問 echo JSON -------------------
+if (basename($_SERVER['PHP_SELF']) === 'search_mode.php') {
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['cafes' => $cafes], JSON_UNESCAPED_UNICODE);
+    exit;
+}
