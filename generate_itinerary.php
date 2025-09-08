@@ -94,7 +94,7 @@ $endTime = $timeSettings[$time_preference]["end"] ?? "20:00";
 $cafe_map = [];
 $cafe_list = "";
 foreach ($cafes as $index => $cafe){
-    $code = "Cafe_".($index+1);
+    $code = "CA".($index+1); // 代號簡化成 CA1, CA2
     $cafe_map[$code] = $cafe['name'];
     
     $features = [];
@@ -199,10 +199,10 @@ function parseGPTResponse($raw){
 }
 
 // ------------------- Fallback 行程 -------------------
-function fallbackItinerary($cafes, $location){
+function fallbackItinerary($cafes, $cafe_map){
     $itinerary = [];
     $timeSlots = ['09:00','11:00','13:00','15:00','17:00'];
-    
+
     if(count($cafes)>0){
         $itinerary[] = [
             'time'=>$timeSlots[0],
@@ -213,7 +213,7 @@ function fallbackItinerary($cafes, $location){
             'category'=>'cafe'
         ];
     }
-    
+
     $itinerary[] = [
         'time'=>$timeSlots[1],
         'place'=>'附近景點或自由活動',
@@ -222,7 +222,7 @@ function fallbackItinerary($cafes, $location){
         'period'=>'morning',
         'category'=>'free_activity'
     ];
-    
+
     if(count($cafes)>1){
         $itinerary[] = [
             'time'=>$timeSlots[2],
@@ -233,7 +233,7 @@ function fallbackItinerary($cafes, $location){
             'category'=>'cafe'
         ];
     }
-    
+
     $itinerary[] = [
         'time'=>$timeSlots[3],
         'place'=>'商場/文創園區/藝文活動',
@@ -242,7 +242,7 @@ function fallbackItinerary($cafes, $location){
         'period'=>'afternoon',
         'category'=>'attraction'
     ];
-    
+
     $itinerary[] = [
         'time'=>$timeSlots[4],
         'place'=>'自由探索夜間活動',
@@ -251,7 +251,7 @@ function fallbackItinerary($cafes, $location){
         'period'=>'evening',
         'category'=>'free_activity'
     ];
-    
+
     return [
         'reason'=>"使用 fallback 行程，依據提供的咖啡廳列表及使用者地點、偏好自動排程",
         'itinerary'=>$itinerary
@@ -274,7 +274,7 @@ if($result && isset($result['itinerary'])){
 
 // 若 GPT 回傳失敗，使用 fallback
 if(!$result){
-    $result = fallbackItinerary($cafes, $location);
+    $result = fallbackItinerary($cafes, $cafe_map);
 }
 
 header('Content-Type: application/json');
