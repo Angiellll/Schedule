@@ -9,23 +9,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit(0);
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-// ------------------- 讀取前端參數 -------------------
-$location = $_POST['location'] ?? $_GET['location'] ?? '';
-$search_mode = $_POST['search_mode'] ?? $_GET['search_mode'] ?? 'address';
-$preferences = $_POST['preferences'] ?? $_GET['preferences'] ?? [];
-if (is_string($preferences)) $preferences = json_decode($preferences,true) ?? explode(',', $preferences);
+// ------------------- 讀取 JSON -------------------
+$input = json_decode(file_get_contents('php://input'), true);
 
-$style_preference = $_POST['style'] ?? $_GET['style'] ?? '文青';
-$time_preference = $_POST['time_preference'] ?? $_GET['time_preference'] ?? '標準';
-$user_goals = $_POST['user_goals'] ?? $_GET['user_goals'] ?? [];
-if (is_string($user_goals)) $user_goals = json_decode($user_goals,true) ?? explode(',', $user_goals);
+$location = $input['location'] ?? '';
+$search_mode = $input['searchMode'] ?? 'address';
+$preferences = $input['preferences'] ?? [];
+$style_preference = $input['style'] ?? '文青';
+$time_preference = $input['timePreference'] ?? '標準';
+$user_goals = $input['userGoals'] ?? [];
+$user_lat = $input['latitude'] ?? null;
+$user_lng = $input['longitude'] ?? null;
+$cafes = $input['cafes'] ?? [];
 
-$user_lat = $_POST['latitude'] ?? $_GET['latitude'] ?? null;  
-$user_lng = $_POST['longitude'] ?? $_GET['longitude'] ?? null;
-
-// ------------------- 讀取前端傳來的咖啡廳列表 -------------------
-$cafes = $_POST['cafes'] ?? $_GET['cafes'] ?? '[]';
-if (is_string($cafes)) $cafes = json_decode($cafes, true) ?? [];
+// 如果傳進來的是字串 JSON，再 decode
+if (is_string($preferences)) $preferences = json_decode($preferences,true) ?? [];
+if (is_string($user_goals)) $user_goals = json_decode($user_goals,true) ?? [];
+if (is_string($cafes)) $cafes = json_decode($cafes,true) ?? [];
 
 // ------------------- 篩選咖啡廳 -------------------
 function filterCafesByPreferences($cafes, $preferences){
@@ -198,7 +198,6 @@ function fallbackItinerary($cafes, $location){
     $itinerary = [];
     $timeSlots = ['09:00','11:00','13:00','15:00','17:00'];
     
-    // 上午咖啡廳
     if(count($cafes)>0){
         $itinerary[] = [
             'time'=>$timeSlots[0],
@@ -210,7 +209,6 @@ function fallbackItinerary($cafes, $location){
         ];
     }
     
-    // 上午自由活動/景點
     $itinerary[] = [
         'time'=>$timeSlots[1],
         'place'=>'附近景點或自由活動',
@@ -220,7 +218,6 @@ function fallbackItinerary($cafes, $location){
         'category'=>'free_activity'
     ];
     
-    // 下午咖啡廳
     if(count($cafes)>1){
         $itinerary[] = [
             'time'=>$timeSlots[2],
@@ -232,7 +229,6 @@ function fallbackItinerary($cafes, $location){
         ];
     }
     
-    // 下午景點或自由活動
     $itinerary[] = [
         'time'=>$timeSlots[3],
         'place'=>'商場/文創園區/藝文活動',
@@ -242,7 +238,6 @@ function fallbackItinerary($cafes, $location){
         'category'=>'attraction'
     ];
     
-    // 晚上自由活動
     $itinerary[] = [
         'time'=>$timeSlots[4],
         'place'=>'自由探索夜間活動',
