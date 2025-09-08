@@ -132,7 +132,7 @@ $search_info = $search_mode==='mrt' ? "以捷運站「{$location}」為中心" :
 // ------------------- GPT Prompt -------------------
 $apiKey = $_ENV['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY') ?? "sk-xxxxxx...";
 
-$prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON，上午安排1間咖啡廳，下午1間咖啡廳，其他時間安排自由活動。
+$prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON，上午安排1間咖啡廳，下午安排1間咖啡廳，其他時段安排景點或自由活動。
 規劃地點：{$search_info}
 {$preference_text}
 {$user_goal_text}
@@ -143,19 +143,20 @@ $prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON�
 
 要求：
 1. 從上述提供的咖啡廳列表中挑選，不可使用列表外的咖啡廳
-2. 優化路線或距離，避免來回跑
-3. 每個行程需說明為何選擇這些咖啡廳或地點，以及如何符合使用者風格、時間偏好與偏好條件
-4. 回傳 JSON，格式如下：
+2. 其他時段安排景點或自由活動，必須根據使用者地點、旅遊目的/偏好型、活動風格
+3. 優化路線或距離，避免來回跑
+4. 每個行程需說明為何選擇這些咖啡廳或景點，以及如何符合使用者風格、時間偏好與偏好條件
+5. 回傳 JSON，格式如下：
 {
-  \"reason\": \"請說明推薦的理由，需解釋為何選擇這些咖啡廳或地點，以及這些地點如何符合使用者的風格、時間偏好與偏好條件。若是地址搜尋請包含『{$location}』，若是捷運搜尋請包含『{$location}站』。\",
+  \"reason\": \"請說明推薦的理由，需解釋為何選擇這些咖啡廳或景點，以及這些地點如何符合使用者的風格、時間偏好與偏好條件。若是地址搜尋請包含『{$location}』，若是捷運搜尋請包含『{$location}站』。\",
   \"itinerary\": [
     {
       \"time\": \"09:00\",
-      \"place\": \"咖啡廳名稱\",
+      \"place\": \"咖啡廳或景點名稱\",
       \"activity\": \"活動內容\",
       \"transport\": \"步行/交通方式\",
-      \"period\": \"morning\",
-      \"category\": \"cafe\"
+      \"period\": \"morning/afternoon/evening\",
+      \"category\": \"cafe/attraction/free_activity\"
     }
   ]
 }";
@@ -185,25 +186,86 @@ function callOpenAI($apiKey, $prompt){
     return $data['choices'][0]['message']['content'];
 }
 
-function segmentItineraryByTime($itinerary){
-    foreach($itinerary as &$item){
-        $hour=(int)substr($item['time'],0,2);
-        if($hour<12) $item['period']='morning';
-        elseif($hour<18) $item['period']='afternoon';
-        else $item['period']='evening';
-    }
-    return $itinerary;
-}
-
+// ------------------- 解析 GPT 回應 -------------------
 function parseGPTResponse($raw){
     $json = json_decode($raw,true);
     if($json && isset($json['itinerary'])) return $json;
-    return ['reason'=>'AI服務無法取得，使用 fallback 行程','itinerary'=>[]];
+    return false;
+}
+
+// ------------------- Fallback 行程 -------------------
+function fallbackItinerary($cafes, $location){
+    $itinerary = [];
+    $timeSlots = ['09:00','11:00','13:00','15:00','17:00'];
+    
+    // 上午咖啡廳
+    if(count($cafes)>0){
+        $itinerary[] = [
+            'time'=>$timeSlots[0],
+            'place'=>$cafes[0]['name'],
+            'activity'=>'享用咖啡與輕食，放鬆休息',
+            'transport'=>'步行',
+            'period'=>'morning',
+            'category'=>'cafe'
+        ];
+    }
+    
+    // 上午自由活動/景點
+    $itinerary[] = [
+        'time'=>$timeSlots[1],
+        'place'=>'附近景點或自由活動',
+        'activity'=>'參觀或探索附近景點，符合使用者偏好與風格',
+        'transport'=>'步行/大眾運輸',
+        'period'=>'morning',
+        'category'=>'free_activity'
+    ];
+    
+    // 下午咖啡廳
+    if(count($cafes)>1){
+        $itinerary[] = [
+            'time'=>$timeSlots[2],
+            'place'=>$cafes[1]['name'],
+            'activity'=>'下午茶時間，體驗特色咖啡廳',
+            'transport'=>'步行/交通工具',
+            'period'=>'afternoon',
+            'category'=>'cafe'
+        ];
+    }
+    
+    // 下午景點或自由活動
+    $itinerary[] = [
+        'time'=>$timeSlots[3],
+        'place'=>'商場/文創園區/藝文活動',
+        'activity'=>'參觀符合旅遊目的或偏好型的景點',
+        'transport'=>'步行/大眾運輸',
+        'period'=>'afternoon',
+        'category'=>'attraction'
+    ];
+    
+    // 晚上自由活動
+    $itinerary[] = [
+        'time'=>$timeSlots[4],
+        'place'=>'自由探索夜間活動',
+        'activity'=>'夜間散步或小型活動，體驗當地文化',
+        'transport'=>'步行',
+        'period'=>'evening',
+        'category'=>'free_activity'
+    ];
+    
+    return [
+        'reason'=>"使用 fallback 行程，依據提供的咖啡廳列表及使用者地點、偏好自動排程",
+        'itinerary'=>$itinerary
+    ];
 }
 
 // ------------------- 執行 -------------------
 $gpt_response = callOpenAI($apiKey, $prompt);
-$result = $gpt_response ? parseGPTResponse($gpt_response) : ['reason'=>'AI服務無法取得，使用 fallback 行程','itinerary'=>[]];
+$result = parseGPTResponse($gpt_response);
+
+if(!$result){
+    $result = fallbackItinerary($cafes, $location);
+}
 
 header('Content-Type: application/json');
 echo json_encode($result, JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT);
+?>
