@@ -257,19 +257,32 @@ function fallbackItinerary($cafes, $cafe_map){
         'itinerary'=>$itinerary
     ];
 }
+// ------------------- 代號強制轉真名 -------------------
+function forceCafeName($itinerary, $cafe_map){
+    foreach($itinerary as &$item){
+        if(!isset($item['place'])) continue;
 
-// ------------------- 執行 -------------------
-$gpt_response = callOpenAI($apiKey, $prompt);
-$result = parseGPTResponse($gpt_response);
-
-// 代號轉回實際名稱
-if($result && isset($result['itinerary'])){
-    foreach($result['itinerary'] as &$item){
-        if(isset($item['place']) && isset($cafe_map[$item['place']])){
-            $item['place'] = $cafe_map[$item['place']];
+        // 去除空白、冒號等，抓到代號
+        $place = trim($item['place']);
+        foreach($cafe_map as $code => $name){
+            if(strpos($place, $code) !== false){
+                $item['place'] = $name; // 強制轉成真名
+                break;
+            }
         }
     }
     unset($item);
+    return $itinerary;
+}
+
+// ------------------- 執行 -------------------
+// 呼叫 GPT
+$gpt_response = callOpenAI($apiKey, $prompt);
+$result = parseGPTResponse($gpt_response);
+
+// 強制把 place 轉成真名
+if($result && isset($result['itinerary'])){
+    $result['itinerary'] = forceCafeName($result['itinerary'], $cafe_map);
 }
 
 // 若 GPT 回傳失敗，使用 fallback
