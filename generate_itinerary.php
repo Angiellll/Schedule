@@ -90,9 +90,13 @@ $timeSettings = ["早鳥"=>["start"=>"09:00","end"=>"18:00"], "標準"=>["start"
 $startTime = $timeSettings[$time_preference]["start"] ?? "10:00";
 $endTime = $timeSettings[$time_preference]["end"] ?? "20:00";
 
-// ------------------- 準備咖啡廳文字清單 -------------------
+// ------------------- 生成咖啡廳代號清單 -------------------
+$cafe_map = [];
 $cafe_list = "";
-foreach ($cafes as $index => $cafe) {
+foreach ($cafes as $index => $cafe){
+    $code = "Cafe_".($index+1);
+    $cafe_map[$code] = $cafe['name'];
+    
     $features = [];
     if (isset($cafe['socket']) && $cafe['socket']==='1') $features[]='有插座';
     if (isset($cafe['limited_time']) && $cafe['limited_time']==='0') $features[]='不限時';
@@ -100,7 +104,7 @@ foreach ($cafes as $index => $cafe) {
     if (isset($cafe['outdoor_seating']) && $cafe['outdoor_seating']==='1') $features[]='戶外座位';
     if (isset($cafe['pet_friendly']) && $cafe['pet_friendly']==='1') $features[]='寵物友善';
 
-    $cafe_list .= ($index+1).". ".$cafe['name']."\n";
+    $cafe_list .= "$code: ".$cafe['name']."\n";
     $cafe_list .= "   地址: ".($cafe['address'] ?? '未知')."\n";
     if (!empty($cafe['mrt'])) $cafe_list .= "   捷運: ".$cafe['mrt']."\n";
     if (!empty($features)) $cafe_list .= "   特色: ".implode('、', $features)."\n";
@@ -132,27 +136,28 @@ $search_info = $search_mode==='mrt' ? "以捷運站「{$location}」為中心" :
 // ------------------- GPT Prompt -------------------
 $apiKey = $_ENV['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY') ?? "sk-xxxxxx...";
 
-$prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON，上午安排1間咖啡廳，下午安排1間咖啡廳，其他時段安排景點或自由活動。
+$prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON。
+上午安排1間咖啡廳，下午安排1間咖啡廳，其他時段安排景點或自由活動。
 規劃地點：{$search_info}
 {$preference_text}
 {$user_goal_text}
 使用者風格：{$style_preference}
 時間偏好：{$time_preference}（{$startTime} - {$endTime}）
-可用咖啡廳：
+可用咖啡廳（請只使用以下代號，不可自行生成其他咖啡廳名稱）：
 {$cafe_list}
 
 要求：
-1. 從上述提供的咖啡廳列表中挑選，不可使用列表外的咖啡廳
-2. 其他時段安排景點或自由活動，必須根據使用者地點、旅遊目的/偏好型、活動風格
-3. 優化路線或距離，避免來回跑
+1. 嚴格使用上述咖啡廳代號，禁止列表外咖啡廳
+2. 其他時段安排景點或自由活動，符合使用者地點、旅遊目的、風格與偏好
+3. 優化路線避免來回跑
 4. 每個行程需說明為何選擇這些咖啡廳或景點，以及如何符合使用者風格、時間偏好與偏好條件
 5. 回傳 JSON，格式如下：
 {
-  \"reason\": \"請說明推薦的理由，需解釋為何選擇這些咖啡廳或景點，以及這些地點如何符合使用者的風格、時間偏好與偏好條件。若是地址搜尋請包含『{$location}』，若是捷運搜尋請包含『{$location}站』。\",
+  \"reason\": \"說明推薦理由\",
   \"itinerary\": [
     {
       \"time\": \"09:00\",
-      \"place\": \"咖啡廳或景點名稱\",
+      \"place\": \"咖啡廳或景點代號\",
       \"activity\": \"活動內容\",
       \"transport\": \"步行/交通方式\",
       \"period\": \"morning/afternoon/evening\",
@@ -174,7 +179,7 @@ function callOpenAI($apiKey, $prompt){
         CURLOPT_POSTFIELDS => json_encode([
             "model"=>"gpt-3.5-turbo",
             "messages"=>[["role"=>"system","content"=>"你是一個專業旅遊行程規劃師"],["role"=>"user","content"=>$prompt]],
-            "temperature"=>0.8,
+            "temperature"=>0,
             "max_tokens"=>1500
         ])
     ]);
@@ -257,6 +262,17 @@ function fallbackItinerary($cafes, $location){
 $gpt_response = callOpenAI($apiKey, $prompt);
 $result = parseGPTResponse($gpt_response);
 
+// 代號轉回實際名稱
+if($result && isset($result['itinerary'])){
+    foreach($result['itinerary'] as &$item){
+        if(isset($item['place']) && isset($cafe_map[$item['place']])){
+            $item['place'] = $cafe_map[$item['place']];
+        }
+    }
+    unset($item);
+}
+
+// 若 GPT 回傳失敗，使用 fallback
 if(!$result){
     $result = fallbackItinerary($cafes, $location);
 }
