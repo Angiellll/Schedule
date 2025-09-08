@@ -37,7 +37,6 @@ $searchParams = [
     'preferences' => implode(',', $preferences)
 ];
 
-// 將 $_POST/$_GET 暫時設定給 search_mode.php
 $_GET = $_GET + $searchParams;
 $_POST = $_POST + $searchParams;
 
@@ -104,20 +103,28 @@ $search_info = $search_mode==='mrt' ? "以捷運站「{$location}」為中心" :
 $apiKey = $_ENV['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY') ?? "sk-xxxxxx...";
 error_log("[Log] API Key 使用狀態: ".($apiKey==="sk-xxxxxx..." ? "未設定" : "已設定"));
 
-$prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON，上午安排1間咖啡廳，下午1間咖啡廳，其他時間安排與使用者偏好/活動風格相關的場所。
+$prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON，上午安排1間咖啡廳，下午1間咖啡廳，其他時間安排自由活動。
 規劃地點：{$search_info}
 {$preference_text}
 {$user_goal_text}
 使用者風格：{$style_preference}
 時間偏好：{$time_preference}（{$startTime} - {$endTime}）
-
 可用咖啡廳：
 {$cafe_list}
 
-請生成 JSON：
+請回傳 JSON，格式如下：
 {
-  \"reason\": \"請詳細說明推薦的理由，需解釋為何選擇這些咖啡廳或地點，以及這些地點如何符合使用者的風格、時間偏好與偏好條件。若是地址搜尋請包含『{$location}』，若是捷運搜尋請包含『{$location}站』。\",
-  \"itinerary\": []
+  \"reason\": \"請說明為何選擇這些咖啡廳與景點，符合使用者偏好與風格\",
+  \"itinerary\": [
+    {
+      \"time\": \"09:00\",
+      \"place\": \"咖啡廳名稱\",
+      \"activity\": \"活動內容\",
+      \"transport\": \"步行/交通方式\",
+      \"period\": \"morning\",
+      \"category\": \"cafe\"
+    }
+  ]
 }";
 
 // ------------------- 呼叫 OpenAI -------------------
@@ -180,10 +187,7 @@ function haversine($lat1,$lng1,$lat2,$lng2){
 }
 
 function callOpenAI($apiKey, $prompt){
-    if(empty($apiKey) || $apiKey==="sk-xxxxxx...") {
-        error_log("[OpenAI] API Key 無效或未設定");
-        return false;
-    }
+    if(empty($apiKey) || $apiKey==="sk-xxxxxx...") return false;
     $ch = curl_init();
     curl_setopt_array($ch,[
         CURLOPT_URL => "https://api.openai.com/v1/chat/completions",
@@ -193,28 +197,16 @@ function callOpenAI($apiKey, $prompt){
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => json_encode([
             "model"=>"gpt-3.5-turbo",
-            "messages"=>[["role"=>"system","content"=>"你是一個專業旅遊行程規劃師，能依據使用者偏好與場所資訊推薦行程。"],["role"=>"user","content"=>$prompt]],
+            "messages"=>[["role"=>"system","content"=>"你是一個專業旅遊行程規劃師"],["role"=>"user","content"=>$prompt]],
             "temperature"=>0.8,
             "max_tokens"=>1500
         ])
     ]);
     $response = curl_exec($ch);
-    $http_code = curl_getinfo($ch,CURLINFO_HTTP_CODE);
-    if(curl_errno($ch)){
-        error_log("[OpenAI] cURL 錯誤: ".curl_error($ch));
-        curl_close($ch);
-        return false;
-    }
+    if(curl_errno($ch)){ curl_close($ch); return false; }
     curl_close($ch);
-    error_log("[OpenAI] HTTP code: ".$http_code);
-    error_log("[OpenAI] raw response: ".$response);
-    if($http_code!==200) return false;
     $data=json_decode($response,true);
-    if(!$data || !isset($data['choices'][0]['message']['content'])){
-        error_log("[OpenAI] JSON 解析失敗或缺少 content");
-        return false;
-    }
-    error_log("[OpenAI] AI 回應內容: ".$data['choices'][0]['message']['content']);
+    if(!$data || !isset($data['choices'][0]['message']['content'])) return false;
     return $data['choices'][0]['message']['content'];
 }
 
@@ -236,12 +228,11 @@ function generateFallbackItinerarySegmented($cafes,$search_mode,$location,$start
     $itinerary=[];
     $cafes_count=count($cafes);
     if($cafes_count>0){
-        $cafe1=$cafes[rand(0,$cafes_count-1)];
+        $cafe1=$cafes[0];
         $itinerary[]=['time'=>$start,'place'=>$cafe1['name'],'activity'=>'享用早餐咖啡','transport'=>'步行 5 分鐘','period'=>'morning','category'=>'cafe'];
     }
     if($cafes_count>1){
-        $cafe2=$cafes[rand(0,$cafes_count-1)];
-        while($cafe2['name']===$cafe1['name']) $cafe2=$cafes[rand(0,$cafes_count-1)];
+        $cafe2=$cafes[1];
         $itinerary[]=['time'=>date('H:i',strtotime($start.' +4 hours')),'place'=>$cafe2['name'],'activity'=>'享用午後咖啡','transport'=>'步行 5 分鐘','period'=>'afternoon','category'=>'cafe'];
     }
     $itinerary[]=['time'=>date('H:i',strtotime($start.' +2 hours')),'place'=>'自由活動','activity'=>'探索周邊景點','transport'=>'步行或大眾運輸','period'=>'morning','category'=>'sightseeing'];
