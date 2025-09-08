@@ -90,13 +90,9 @@ $timeSettings = ["早鳥"=>["start"=>"09:00","end"=>"18:00"], "標準"=>["start"
 $startTime = $timeSettings[$time_preference]["start"] ?? "10:00";
 $endTime = $timeSettings[$time_preference]["end"] ?? "20:00";
 
-// ------------------- 生成咖啡廳代號清單 -------------------
-$cafe_map = [];
+// ------------------- 生成咖啡廳清單 -------------------
 $cafe_list = "";
-foreach ($cafes as $index => $cafe){
-    $code = "CA".($index+1); // 代號簡化成 CA1, CA2
-    $cafe_map[$code] = $cafe['name'];
-    
+foreach ($cafes as $cafe){
     $features = [];
     if (isset($cafe['socket']) && $cafe['socket']==='1') $features[]='有插座';
     if (isset($cafe['limited_time']) && $cafe['limited_time']==='0') $features[]='不限時';
@@ -104,7 +100,7 @@ foreach ($cafes as $index => $cafe){
     if (isset($cafe['outdoor_seating']) && $cafe['outdoor_seating']==='1') $features[]='戶外座位';
     if (isset($cafe['pet_friendly']) && $cafe['pet_friendly']==='1') $features[]='寵物友善';
 
-    $cafe_list .= "$code: ".$cafe['name']."\n";
+    $cafe_list .= $cafe['name']."\n";
     $cafe_list .= "   地址: ".($cafe['address'] ?? '未知')."\n";
     if (!empty($cafe['mrt'])) $cafe_list .= "   捷運: ".$cafe['mrt']."\n";
     if (!empty($features)) $cafe_list .= "   特色: ".implode('、', $features)."\n";
@@ -143,11 +139,11 @@ $prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON�
 {$user_goal_text}
 使用者風格：{$style_preference}
 時間偏好：{$time_preference}（{$startTime} - {$endTime}）
-可用咖啡廳（請只使用以下代號，不可自行生成其他咖啡廳名稱）：
+可用咖啡廳（請直接使用以下名稱，不可自行生成其他咖啡廳）：
 {$cafe_list}
 
 要求：
-1. 嚴格使用上述咖啡廳代號，禁止列表外咖啡廳
+1. 嚴格使用上述咖啡廳名稱
 2. 其他時段安排景點或自由活動，符合使用者地點、旅遊目的、風格與偏好
 3. 優化路線避免來回跑
 4. 每個行程需說明為何選擇這些咖啡廳或景點，以及如何符合使用者風格、時間偏好與偏好條件
@@ -157,7 +153,7 @@ $prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON�
   \"itinerary\": [
     {
       \"time\": \"09:00\",
-      \"place\": \"咖啡廳或景點代號\",
+      \"place\": \"咖啡廳或景點名稱\",
       \"activity\": \"活動內容\",
       \"transport\": \"步行/交通方式\",
       \"period\": \"morning/afternoon/evening\",
@@ -199,7 +195,7 @@ function parseGPTResponse($raw){
 }
 
 // ------------------- Fallback 行程 -------------------
-function fallbackItinerary($cafes, $cafe_map){
+function fallbackItinerary($cafes){
     $itinerary = [];
     $timeSlots = ['09:00','11:00','13:00','15:00','17:00'];
 
@@ -215,10 +211,10 @@ function fallbackItinerary($cafes, $cafe_map){
     }
 
     $itinerary[] = [
-        'time'=>$timeSlots[1],
-        'place'=>'附近景點或自由活動',
-        'activity'=>'參觀或探索附近景點，符合使用者偏好與風格',
-        'transport'=>'步行/大眾運輸',
+        'time'=>$timeSlots[1] ?? '11:00',
+        'place'=>'自由活動',
+        'activity'=>'探索周邊景點或藝文空間',
+        'transport'=>'步行或大眾運輸',
         'period'=>'morning',
         'category'=>'free_activity'
     ];
@@ -227,8 +223,8 @@ function fallbackItinerary($cafes, $cafe_map){
         $itinerary[] = [
             'time'=>$timeSlots[2],
             'place'=>$cafes[1]['name'],
-            'activity'=>'下午茶時間，體驗特色咖啡廳',
-            'transport'=>'步行/交通工具',
+            'activity'=>'品嚐咖啡與甜點，享受下午時光',
+            'transport'=>'步行',
             'period'=>'afternoon',
             'category'=>'cafe'
         ];
@@ -236,60 +232,36 @@ function fallbackItinerary($cafes, $cafe_map){
 
     $itinerary[] = [
         'time'=>$timeSlots[3],
-        'place'=>'商場/文創園區/藝文活動',
-        'activity'=>'參觀符合旅遊目的或偏好型的景點',
-        'transport'=>'步行/大眾運輸',
+        'place'=>'景點',
+        'activity'=>'參觀附近知名景點或藝文空間',
+        'transport'=>'步行或大眾運輸',
         'period'=>'afternoon',
         'category'=>'attraction'
     ];
 
     $itinerary[] = [
         'time'=>$timeSlots[4],
-        'place'=>'自由探索夜間活動',
-        'activity'=>'夜間散步或小型活動，體驗當地文化',
+        'place'=>'咖啡廳或自由活動',
+        'activity'=>'享受晚間咖啡或散步放鬆',
         'transport'=>'步行',
         'period'=>'evening',
-        'category'=>'free_activity'
+        'category'=>'cafe'
     ];
 
     return [
-        'reason'=>"使用 fallback 行程，依據提供的咖啡廳列表及使用者地點、偏好自動排程",
+        'reason'=>'此行程依照使用者偏好及咖啡廳距離排序安排，兼顧文青風格與輕鬆體驗。',
         'itinerary'=>$itinerary
     ];
 }
-// ------------------- 代號強制轉真名 -------------------
-function forceCafeName($itinerary, $cafe_map){
-    foreach($itinerary as &$item){
-        if(!isset($item['place'])) continue;
 
-        // 去除空白、冒號等，抓到代號
-        $place = trim($item['place']);
-        foreach($cafe_map as $code => $name){
-            if(strpos($place, $code) !== false){
-                $item['place'] = $name; // 強制轉成真名
-                break;
-            }
-        }
-    }
-    unset($item);
-    return $itinerary;
+// ------------------- 生成行程 -------------------
+$rawGPT = callOpenAI($apiKey, $prompt);
+$itineraryData = parseGPTResponse($rawGPT);
+
+if(!$itineraryData){
+    $itineraryData = fallbackItinerary($cafes);
 }
 
-// ------------------- 執行 -------------------
-// 呼叫 GPT
-$gpt_response = callOpenAI($apiKey, $prompt);
-$result = parseGPTResponse($gpt_response);
-
-// 強制把 place 轉成真名
-if($result && isset($result['itinerary'])){
-    $result['itinerary'] = forceCafeName($result['itinerary'], $cafe_map);
-}
-
-// 若 GPT 回傳失敗，使用 fallback
-if(!$result){
-    $result = fallbackItinerary($cafes, $cafe_map);
-}
-
-header('Content-Type: application/json');
-echo json_encode($result, JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT);
-?>
+// ------------------- 回傳 JSON -------------------
+header('Content-Type: application/json; charset=UTF-8');
+echo json_encode($itineraryData, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
