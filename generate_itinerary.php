@@ -23,10 +23,6 @@ if (is_string($user_goals)) $user_goals = json_decode($user_goals,true) ?? explo
 $user_lat = $_POST['latitude'] ?? $_GET['latitude'] ?? null;  
 $user_lng = $_POST['longitude'] ?? $_GET['longitude'] ?? null;
 
-error_log("[Log] location={$location}, search_mode={$search_mode}, preferences=".json_encode($preferences));
-error_log("[Log] style={$style_preference}, time_preference={$time_preference}, user_goals=".json_encode($user_goals));
-error_log("[Log] user_lat={$user_lat}, user_lng={$user_lng}");
-
 // ------------------- include search_mode.php -------------------
 $searchModeParam = ($search_mode==='mrt') ? 'mrt' : 'address';
 $searchParams = [
@@ -42,29 +38,24 @@ $_POST = $_POST + $searchParams;
 
 $searchModePath = __DIR__ . '/search_mode.php';
 if(!file_exists($searchModePath)){
-    error_log("[Log] search_mode.php 不存在");
     echo json_encode(["reason"=>"search_mode.php 不存在","itinerary"=>[]], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
 $cafes = include($searchModePath);
 if (!is_array($cafes)) $cafes = [];
-error_log("[Log] 取得咖啡廳數量: ".count($cafes));
 
 // ------------------- 篩選咖啡廳 -------------------
 $cafes = filterCafesByPreferences($cafes, $preferences);
-error_log("[Log] 篩選後咖啡廳數量: ".count($cafes));
 
 // ------------------- 時間設定 -------------------
 $timeSettings = ["早鳥"=>["start"=>"09:00","end"=>"18:00"], "標準"=>["start"=>"10:00","end"=>"20:00"], "夜貓"=>["start"=>"13:00","end"=>"23:00"]];
 $startTime = $timeSettings[$time_preference]["start"] ?? "10:00";
 $endTime = $timeSettings[$time_preference]["end"] ?? "20:00";
-error_log("[Log] startTime={$startTime}, endTime={$endTime}");
 
 // ------------------- 按距離排序 -------------------
 if ($user_lat !== null && $user_lng !== null) {
     $cafes = sortCafesByDistance($cafes, $user_lat, $user_lng);
-    error_log("[Log] 已按距離排序咖啡廳");
 }
 
 // ------------------- 準備咖啡廳文字清單 -------------------
@@ -101,7 +92,6 @@ $search_info = $search_mode==='mrt' ? "以捷運站「{$location}」為中心" :
 
 // ------------------- GPT Prompt -------------------
 $apiKey = $_ENV['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY') ?? "sk-xxxxxx...";
-error_log("[Log] API Key 使用狀態: ".($apiKey==="sk-xxxxxx..." ? "未設定" : "已設定"));
 
 $prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON，上午安排1間咖啡廳，下午1間咖啡廳，其他時間安排自由活動。
 規劃地點：{$search_info}
@@ -112,7 +102,11 @@ $prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON�
 可用咖啡廳：
 {$cafe_list}
 
-請回傳 JSON，格式如下：
+要求：
+1. 從上述提供的咖啡廳列表中挑選，不可使用列表外的咖啡廳
+2. 優化路線或距離，避免來回跑
+3. 每個行程需說明為何選擇這些咖啡廳或地點，以及如何符合使用者風格、時間偏好與偏好條件
+4. 回傳 JSON，格式如下：
 {
   \"reason\": \"請說明推薦的理由，需解釋為何選擇這些咖啡廳或地點，以及這些地點如何符合使用者的風格、時間偏好與偏好條件。若是地址搜尋請包含『{$location}』，若是捷運搜尋請包含『{$location}站』。\",
   \"itinerary\": [
@@ -130,7 +124,7 @@ $prompt = "你是一個專業旅遊行程規劃師，請生成一日行程 JSON�
 // ------------------- 呼叫 OpenAI -------------------
 $ai_response = callOpenAI($apiKey, $prompt);
 if ($ai_response === false) {
-    error_log("[Log] AI 服務無法取得，使用 fallback 行程");
+    // fallback：依距離選擇前兩間咖啡廳
     $fallback_itinerary = generateFallbackItinerarySegmented($cafes, $search_mode, $location, $startTime, $endTime);
     $result = [
         'reason' => "AI 服務無法取得，使用 fallback 行程",
@@ -138,9 +132,7 @@ if ($ai_response === false) {
         'raw_text' => null
     ];
 } else {
-    error_log("[Log] AI 回應成功");
     $result = parseAIResponseSegmented($ai_response, $startTime, $endTime);
-    error_log("[Log] 解析後結果: ".print_r($result,true));
 }
 
 // ------------------- 輸出 JSON -------------------
@@ -229,11 +221,11 @@ function generateFallbackItinerarySegmented($cafes,$search_mode,$location,$start
     $cafes_count=count($cafes);
     if($cafes_count>0){
         $cafe1=$cafes[0];
-        $itinerary[]=['time'=>$start,'place'=>$cafe1['name'],'activity'=>'享用早餐咖啡','transport'=>'步行 5 分鐘','period'=>'morning','category'=>'cafe'];
+        $itinerary[]=['time'=>$start,'place'=>$cafe1['name'],'activity'=>'享用早餐咖啡','transport'=>'步行或交通','period'=>'morning','category'=>'cafe'];
     }
     if($cafes_count>1){
         $cafe2=$cafes[1];
-        $itinerary[]=['time'=>date('H:i',strtotime($start.' +4 hours')),'place'=>$cafe2['name'],'activity'=>'享用午後咖啡','transport'=>'步行 5 分鐘','period'=>'afternoon','category'=>'cafe'];
+        $itinerary[]=['time'=>date('H:i',strtotime($start.' +4 hours')),'place'=>$cafe2['name'],'activity'=>'享用午後咖啡','transport'=>'步行或交通','period'=>'afternoon','category'=>'cafe'];
     }
     $itinerary[]=['time'=>date('H:i',strtotime($start.' +2 hours')),'place'=>'自由活動','activity'=>'探索周邊景點','transport'=>'步行或大眾運輸','period'=>'morning','category'=>'sightseeing'];
     return $itinerary;
