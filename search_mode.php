@@ -9,13 +9,17 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 // ------------------- 讀取參數 -------------------
-$searchMode = $_POST['search_mode'] ?? $_GET['search_mode'] ?? 'address';
-$city = $_POST['city'] ?? $_GET['city'] ?? null;
-$district = $_POST['district'] ?? $_GET['district'] ?? null;
-$road = $_POST['road'] ?? $_GET['road'] ?? null;
-$mrt = $_POST['mrt'] ?? $_GET['mrt'] ?? null;
-$preferences = $_POST['preferences'] ?? $_GET['preferences'] ?? [];
-if (is_string($preferences)) $preferences = explode(',', $preferences);
+$searchMode  = $_POST['search_mode'] ?? $_GET['search_mode'] ?? 'address'; // address | mrt
+$city        = $_POST['city']        ?? $_GET['city']        ?? null;       // e.g. taipei / xinbei / ...
+$district    = $_POST['district']    ?? $_GET['district']    ?? null;       // 中文區名（模糊比對 address）
+$road        = $_POST['road']        ?? $_GET['road']        ?? null;       // 路名（模糊比對 address）
+$mrt         = $_POST['mrt']         ?? $_GET['mrt']         ?? null;       // 站名（模糊比對 cafe.mrt）
+$preferences = $_POST['preferences'] ?? $_GET['preferences'] ?? [];         // CSV: socket,no_time_limit,...
+
+// 將 preferences 統一成陣列（英文 key）
+if (is_string($preferences)) {
+    $preferences = array_filter(array_map('trim', explode(',', $preferences)), fn($v) => $v !== '');
+}
 
 // ------------------- 讀取 JSON -------------------
 $jsonFile = __DIR__ . '/cafes.json';
@@ -23,45 +27,46 @@ $cafes = [];
 if (file_exists($jsonFile)) {
     $jsonData = file_get_contents($jsonFile);
     $cafes = json_decode($jsonData, true);
-    if ($cafes === null) $cafes = [];
+    if (!is_array($cafes)) $cafes = [];
+}
+
+// 安全的字串判斷（null-safe stripos）
+function contains_ci(?string $haystack, ?string $needle): bool {
+    if ($haystack === null || $needle === null || $needle === '') return false;
+    return (stripos($haystack, $needle) !== false);
 }
 
 // ------------------- 過濾咖啡廳 -------------------
-$cafes = array_filter($cafes, function($cafe) use ($searchMode, $city, $district, $road, $mrt, $preferences) {
+$cafes = array_values(array_filter($cafes, function($cafe) use ($searchMode, $city, $district, $road, $mrt, $preferences) {
+    // 1) 城市（完全相等）
     if ($city && isset($cafe['city']) && $cafe['city'] !== $city) return false;
 
+    // 2) 地址 or 捷運
     if ($searchMode === 'address') {
-        if ($district && stripos($cafe['address'], $district) === false) return false;
-        if ($road && stripos($cafe['address'], $road) === false) return false;
+        if ($district && !contains_ci($cafe['address'] ?? '', $district)) return false;
+        if ($road && !contains_ci($cafe['address'] ?? '', $road)) return false;
+    } else if ($searchMode === 'mrt') {
+        if ($mrt && !contains_ci($cafe['mrt'] ?? '', $mrt)) return false;
     }
 
-    if ($searchMode === 'mrt') {
-        if ($mrt && (!isset($cafe['mrt']) || stripos($cafe['mrt'], $mrt) === false)) return false;
-    }
-
-    foreach ($preferences as $pref) {
-        $pref = trim($pref);
-        if ($pref === 'wifi' && (!isset($cafe['wifi']) || $cafe['wifi'] != "1")) return false;
-        if ($pref === 'socket' && (!isset($cafe['socket']) || $cafe['socket'] != "1")) return false;
-        if ($pref === 'quiet' && (!isset($cafe['quiet']) || $cafe['quiet'] != "1")) return false;
-        if ($pref === 'no_time_limit' && (!isset($cafe['limited_time']) || $cafe['limited_time'] != "0")) return false;
-        if ($pref === 'pet_friendly' && (!isset($cafe['pet_friendly']) || $cafe['pet_friendly'] != "1")) return false;
-        if ($pref === 'outdoor_seating' && (!isset($cafe['outdoor_seating']) || $cafe['outdoor_seating'] != "1")) return false;
-        if ($pref === 'minimum_charge' && (!isset($cafe['minimum_charge']) || $cafe['minimum_charge'] != "1")) return false;
-    }
+    // 3) 偏好（只保留你指定的五個）
+    //    limited_time：1=有限時、0=不限時（若用戶選 no_time_limit，則 limited_time 必須為 "0"）
+    //    minimum_charge：1=有低消、0=無低消（若用戶選 minimum_charge，代表要「無低消」，所以必須為 "0"）
+    $prefSet = array_flip($preferences); // O(1) 查詢
+    // 有插座
+    if (isset($prefSet['socket']) && (($cafe['socket'] ?? '0') !== "1")) return false;
+    // 不限時
+    if (isset($prefSet['no_time_limit']) && (($cafe['limited_time'] ?? '1') !== "0")) return false;
+    // 無低消
+    if (isset($prefSet['minimum_charge']) && (($cafe['minimum_charge'] ?? '1') !== "0")) return false;
+    // 戶外座位
+    if (isset($prefSet['outdoor_seating']) && (($cafe['outdoor_seating'] ?? '0') !== "1")) return false;
+    // 寵物友善
+    if (isset($prefSet['pet_friendly']) && (($cafe['pet_friendly'] ?? '0') !== "1")) return false;
 
     return true;
-});
+}));
 
-// 重新索引
-$cafes = array_values($cafes);
-
-// ------------------- 直接訪問 echo JSON -------------------
-if (basename($_SERVER['PHP_SELF']) === 'search_mode.php') {
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['cafes' => $cafes], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-// 返回 $cafes 給 include 的程式使用
-return $cafes;
+// ------------------- 回傳 JSON -------------------
+header('Content-Type: application/json; charset=utf-8');
+echo json_encode(['cafes' => $cafes], JSON_UNESCAPED_UNICODE);
