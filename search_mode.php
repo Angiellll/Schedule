@@ -23,6 +23,10 @@ $district   = $_POST['district']    ?? $_GET['district']    ?? ($in['district'] 
 $road       = $_POST['road']        ?? $_GET['road']        ?? ($in['road'] ?? null);
 $mrt        = $_POST['mrt']         ?? $_GET['mrt']         ?? ($in['mrt'] ?? null);
 
+// 可選：日期（原樣回傳，前端可顯示或後續串天氣用）
+$date       = $_POST['date']        ?? $_GET['date']        ?? ($in['date'] ?? null);
+
+// 偏好可傳：陣列或逗號字串；只保留以下 key
 $preferences = $_POST['preferences'] ?? $_GET['preferences'] ?? ($in['preferences'] ?? []);
 if (is_string($preferences)) {
     $tmp = json_decode($preferences, true);
@@ -31,7 +35,14 @@ if (is_string($preferences)) {
 }
 if (!is_array($preferences)) $preferences = [];
 
-// ============================ 讀資料 ============================
+// 正規化城市：允許英文簡碼
+if (is_string($city)) {
+    $lc = strtolower($city);
+    if ($lc === 'taipei') $city = '台北市';
+    if ($lc === 'xinbei' || $lc === 'newtaipei' || $lc === 'new_taipei') $city = '新北市';
+}
+
+// ============================ 讀資料（cafes.json） ============================
 $jsonFile = __DIR__ . '/cafes.json';
 $cafes = [];
 if (file_exists($jsonFile)) {
@@ -40,9 +51,9 @@ if (file_exists($jsonFile)) {
     if (!is_array($cafes)) $cafes = [];
 }
 
-// ============================ 過濾 ============================
+// ============================ 過濾邏輯 ============================
 $cafes = array_filter($cafes, function($cafe) use ($searchMode, $city, $district, $road, $mrt, $preferences) {
-    // 城市
+    // 城市（若 cafes.json 有 city 欄位才比對）
     if ($city && isset($cafe['city']) && $cafe['city'] !== $city) return false;
 
     // 以地址搜尋
@@ -60,8 +71,8 @@ $cafes = array_filter($cafes, function($cafe) use ($searchMode, $city, $district
     foreach ($preferences as $pref) {
         $pref = trim($pref);
         if ($pref === 'socket'           && (($cafe['socket'] ?? '') !== "1")) return false;
-        if ($pref === 'no_time_limit'    && (($cafe['limited_time'] ?? '') !== "0")) return false;        // 不限時
-        if ($pref === 'minimum_charge'   && (($cafe['minimum_charge'] ?? '') !== "0")) return false;      // 無低消
+        if ($pref === 'no_time_limit'    && (($cafe['limited_time'] ?? '') !== "0")) return false;   // 不限時 => limited_time = "0"
+        if ($pref === 'minimum_charge'   && (($cafe['minimum_charge'] ?? '') !== "0")) return false; // 無低消 => minimum_charge = "0"
         if ($pref === 'outdoor_seating'  && (($cafe['outdoor_seating'] ?? '') !== "1")) return false;
         if ($pref === 'pet_friendly'     && (($cafe['pet_friendly'] ?? '') !== "1")) return false;
     }
@@ -74,4 +85,7 @@ $cafes = array_values($cafes);
 
 // ============================ 回傳 JSON ============================
 header('Content-Type: application/json; charset=utf-8');
-echo json_encode(['cafes' => $cafes], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+echo json_encode([
+    'cafes' => $cafes,
+    'date'  => $date, // 回傳，讓前端帶到 generate_itinerary.php 或顯示用
+], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
