@@ -35,12 +35,31 @@ if (is_string($preferences)) {
 }
 if (!is_array($preferences)) $preferences = [];
 
-// 正規化城市：允許英文簡碼
-if (is_string($city)) {
-    $lc = strtolower($city);
-    if ($lc === 'taipei') $city = '台北市';
-    if ($lc === 'xinbei' || $lc === 'newtaipei' || $lc === 'new_taipei') $city = '新北市';
+// ============================ 正規化工具 ============================
+function norm_city($c) {
+    if (!is_string($c) || $c === '') return $c;
+    $lc = strtolower(trim($c));
+    // 英/拼音 → 中文
+    if (in_array($lc, ['taipei','taipei city'])) return '台北市';
+    if (in_array($lc, ['xinbei','newtaipei','new_taipei','new taipei','new taipei city'])) return '新北市';
+    // 已是中文就回傳原值
+    return $c;
 }
+function is_no_time_limit($v) {
+    // 不限時：limited_time = "0" | "no" | "" | null
+    if ($v === null) return true;
+    $s = strtolower(trim((string)$v));
+    return ($s === '0' || $s === 'no' || $s === '');
+}
+function is_no_min_charge($v) {
+    // 無低消：minimum_charge = "0" | "" | null | "無"
+    if ($v === null) return true;
+    $s = trim((string)$v);
+    if ($s === '' || $s === '0') return true;
+    return (mb_strpos($s, '無') !== false);
+}
+
+$city = norm_city($city);
 
 // ============================ 讀資料（cafes.json） ============================
 $jsonFile = __DIR__ . '/cafes.json';
@@ -53,28 +72,57 @@ if (file_exists($jsonFile)) {
 
 // ============================ 過濾 ============================
 $cafes = array_filter($cafes, function($cafe) use ($searchMode, $city, $district, $road, $mrt, $preferences) {
-    // 城市
-    if ($city && isset($cafe['city']) && $cafe['city'] !== $city) return false;
+    // --- 城市比對（寬鬆）---
+    if ($city) {
+        $cafeCity = isset($cafe['city']) ? $cafe['city'] : null;
+        // 將資料內 city 也正規化後比對
+        $ncafeCity = norm_city($cafeCity);
+        $okCity = true;
+        if ($ncafeCity) {
+            $okCity = ($ncafeCity === $city);
+        } else {
+            // 若資料沒 city，就用 address 內是否包含城市字眼來判定
+            $addr = $cafe['address'] ?? '';
+            $okCity = ($addr && mb_strpos($addr, $city) !== false);
+        }
+        if (!$okCity) return false;
+    }
 
-    // 地址模式
+    // --- 地址模式 ---
     if ($searchMode === 'address') {
-        if ($district && (!isset($cafe['address']) || stripos($cafe['address'], $district) === false)) return false;
-        if ($road && (!isset($cafe['address']) || stripos($cafe['address'], $road) === false)) return false;
+        if ($district) {
+            $addr = $cafe['address'] ?? '';
+            if ($addr === '' || stripos($addr, $district) === false) return false;
+        }
+        if ($road) {
+            $addr = $cafe['address'] ?? '';
+            if ($addr === '' || stripos($addr, $road) === false) return false;
+        }
     }
 
-    // 捷運模式
+    // --- 捷運模式 ---
     if ($searchMode === 'mrt') {
-        if ($mrt && (!isset($cafe['mrt']) || stripos($cafe['mrt'], $mrt) === false)) return false;
+        if ($mrt) {
+            $cv = $cafe['mrt'] ?? '';
+            if ($cv === '' || stripos($cv, $mrt) === false) return false;
+        }
     }
 
-    // 偏好（僅保留以下 key）
+    // --- 偏好（僅保留以下 key）---
     foreach ($preferences as $pref) {
         $pref = trim($pref);
-        if ($pref === 'socket'           && (($cafe['socket'] ?? '') !== "1")) return false;
-        if ($pref === 'no_time_limit'    && (($cafe['limited_time'] ?? '') !== "0")) return false;   // 不限時 => limited_time = "0"
-        if ($pref === 'minimum_charge'   && (($cafe['minimum_charge'] ?? '') !== "0")) return false; // 無低消 => minimum_charge = "0"
-        if ($pref === 'outdoor_seating'  && (($cafe['outdoor_seating'] ?? '') !== "1")) return false;
-        if ($pref === 'pet_friendly'     && (($cafe['pet_friendly'] ?? '') !== "1")) return false;
+        if ($pref === 'socket') {
+            if (($cafe['socket'] ?? '') !== "1") return false;
+        } elseif ($pref === 'no_time_limit') {
+            if (!is_no_time_limit($cafe['limited_time'] ?? null)) return false;
+        } elseif ($pref === 'minimum_charge') {
+            if (!is_no_min_charge($cafe['minimum_charge'] ?? null)) return false;
+        } elseif ($pref === 'outdoor_seating') {
+            if (($cafe['outdoor_seating'] ?? '') !== "1") return false;
+        } elseif ($pref === 'pet_friendly') {
+            if (($cafe['pet_friendly'] ?? '') !== "1") return false;
+        }
+        // 其餘（wifi/quiet）不在此版本過濾
     }
 
     return true;
