@@ -16,29 +16,19 @@ function read_json_input() {
     $data = json_decode($raw, true);
     return is_array($data) ? $data : [];
 }
-
-// 允許 snake_case / camelCase
 function pick($arr, $keys, $default = null) {
-    foreach ($keys as $k) {
-        if (array_key_exists($k, $arr)) return $arr[$k];
-    }
+    foreach ($keys as $k) if (array_key_exists($k, $arr)) return $arr[$k];
     return $default;
 }
-
-// 字串或陣列 → 陣列
 function ensure_array($v) {
     if (is_array($v)) return $v;
     if (is_string($v)) {
         $tmp = json_decode($v, true);
         if (is_array($tmp)) return $tmp;
-        // 逗號字串轉陣列
-        if (strpos($v, ',') !== false) {
-            return array_values(array_filter(array_map('trim', explode(',', $v)), 'strlen'));
-        }
+        if (strpos($v, ',') !== false) return array_values(array_filter(array_map('trim', explode(',', $v)), 'strlen'));
     }
     return [];
 }
-
 function haversine($lat1, $lng1, $lat2, $lng2) {
     $earth_radius = 6371;
     $dLat = deg2rad($lat2 - $lat1);
@@ -47,23 +37,20 @@ function haversine($lat1, $lng1, $lat2, $lng2) {
     $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
     return $earth_radius * $c;
 }
-
 function sort_cafes_by_distance($cafes, $user_lat, $user_lng) {
     foreach ($cafes as &$c) {
         if (!empty($c['latitude']) && !empty($c['longitude'])) {
-            $c['distance'] = haversine(floatval($user_lat), floatval($user_lng), floatval($c['latitude']), floatval($c['longitude']));
+            $c['distance'] = haversine((float)$user_lat, (float)$user_lng, (float)$c['latitude'], (float)$c['longitude']);
         } else {
             $c['distance'] = 9999;
         }
     }
     unset($c);
-    usort($cafes, function($a, $b) {
-        return ($a['distance'] ?? 9999) <=> ($b['distance'] ?? 9999);
-    });
+    usort($cafes, fn($a,$b)=>($a['distance'] ?? 9999) <=> ($b['distance'] ?? 9999));
     return $cafes;
 }
 
-// 偏好過濾（使用前端 chips 對應的英文 key）
+// ============================ 偏好過濾（去除 wifi/quiet） ============================
 function filter_cafes_by_preferences($cafes, $preferences) {
     if (empty($preferences)) return $cafes;
     $filtered = [];
@@ -73,8 +60,6 @@ function filter_cafes_by_preferences($cafes, $preferences) {
         'minimum_charge'   => 1, // minimum_charge === "0"
         'outdoor_seating'  => 1,
         'pet_friendly'     => 1,
-        'wifi'             => 1,
-        'quiet'            => 1,
     ];
     foreach ($cafes as $cafe) {
         $score = 0;
@@ -84,35 +69,25 @@ function filter_cafes_by_preferences($cafes, $preferences) {
                     if (($cafe['limited_time'] ?? '') === '0') $score += ($weightMap[$pref] ?? 0);
                     break;
                 case 'minimum_charge':
-                    // 「無低消」視為 minimum_charge === "0"
                     if (($cafe['minimum_charge'] ?? '') === '0') $score += ($weightMap[$pref] ?? 0);
                     break;
                 default:
                     if (($cafe[$pref] ?? '') === '1') $score += ($weightMap[$pref] ?? 0);
             }
         }
-        // 至少 30% 偏好命中（最少 1）
         if ($score >= max(1, ceil(count($preferences) * 0.3))) {
             $cafe['match_score'] = $score;
             $filtered[] = $cafe;
         }
     }
-    usort($filtered, function($a, $b) {
-        return ($b['match_score'] ?? 0) <=> ($a['match_score'] ?? 0);
-    });
+    usort($filtered, fn($a,$b)=>($b['match_score'] ?? 0) <=> ($a['match_score'] ?? 0));
     return $filtered;
 }
-
-// 咖啡廳名稱索引
 function index_cafes_by_name($cafes) {
     $idx = [];
-    foreach ($cafes as $c) {
-        if (!empty($c['name'])) $idx[$c['name']] = $c;
-    }
+    foreach ($cafes as $c) if (!empty($c['name'])) $idx[$c['name']] = $c;
     return $idx;
 }
-
-// 依咖啡廳名稱把地址/捷運/屬性補回行程項目
 function enrich_itinerary_with_cafe_fields($itinerary, $cafeIndex) {
     foreach ($itinerary as &$item) {
         if (!empty($item['place']) && isset($cafeIndex[$item['place']])) {
@@ -121,26 +96,23 @@ function enrich_itinerary_with_cafe_fields($itinerary, $cafeIndex) {
             $item['mrt']              = $c['mrt']              ?? ($item['mrt'] ?? null);
             $item['limited_time']     = $c['limited_time']     ?? ($item['limited_time'] ?? null);
             $item['socket']           = $c['socket']           ?? ($item['socket'] ?? null);
-            $item['wifi']             = $c['wifi']             ?? ($item['wifi'] ?? null);
-            $item['quiet']            = $c['quiet']            ?? ($item['quiet'] ?? null);
             $item['pet_friendly']     = $c['pet_friendly']     ?? ($item['pet_friendly'] ?? null);
             $item['outdoor_seating']  = $c['outdoor_seating']  ?? ($item['outdoor_seating'] ?? null);
+            // 已移除 wifi / quiet
         }
     }
     unset($item);
     return $itinerary;
 }
-
 function build_tags_from_cafe($c) {
     $tags = [];
     if (isset($c['limited_time']))     $tags[] = ($c['limited_time'] === '0') ? '不限時' : '限時';
     if (isset($c['socket']))           $tags[] = ($c['socket'] === '1') ? '有插座' : '無插座';
-    if (isset($c['wifi']))             $tags[] = ($c['wifi'] === '1') ? '有WiFi' : '無WiFi';
     if (isset($c['pet_friendly']))     $tags[] = ($c['pet_friendly'] === '1') ? '寵物友善' : '非寵物友善';
     if (isset($c['outdoor_seating']))  $tags[] = ($c['outdoor_seating'] === '1') ? '戶外座位' : '無戶外座位';
+    if (isset($c['minimum_charge']))   $tags[] = ($c['minimum_charge'] === '0') ? '無低消' : '有低消';
     return $tags;
 }
-
 function to_candidates($cafes, $limit = 5) {
     $out = [];
     $n = 0;
@@ -151,8 +123,7 @@ function to_candidates($cafes, $limit = 5) {
             'mrt'     => $c['mrt']     ?? null,
             'tags'    => build_tags_from_cafe($c),
         ];
-        $n++;
-        if ($n >= max(3, min(5, $limit))) break;
+        if (++$n >= max(3, min(5, $limit))) break;
     }
     return $out;
 }
@@ -160,7 +131,7 @@ function to_candidates($cafes, $limit = 5) {
 // ============================ 讀取輸入（支援 snake / camel） ============================
 $input          = read_json_input();
 
-$location       = pick($input, ['location'], '');
+$location       = pick($input, ['location'], '');       // ex: 台北市信義區 或「台北市 信義區 忠孝東路」
 $mrt            = pick($input, ['mrt'], '');
 $search_mode    = pick($input, ['search_mode', 'searchMode'], 'address');
 
@@ -172,15 +143,23 @@ $user_goals     = ensure_array(pick($input, ['user_goals', 'userGoals'], []));
 $user_lat       = pick($input, ['latitude'], null);
 $user_lng       = pick($input, ['longitude'], null);
 
+// 新增：可選日期（yyyy-mm-dd），供前端串天氣預報
+$date           = pick($input, ['date'], null);
+
 $mood           = pick($input, ['mood'], 'RELAX');
 $weather        = pick($input, ['weather'], 'UNKNOWN');
 $start_time     = pick($input, ['start_time', 'startTime'], null);
-$duration_hours = intval(pick($input, ['duration_hours', 'durationHours'], 8));
+$duration_hours = (int) pick($input, ['duration_hours', 'durationHours'], 8);
 
-$cafes          = ensure_array(pick($input, ['cafes'], [])); // 候選清單（通常前端 from search_mode.php）
+// 候選清單（常見做法：前端先 call search_mode.php，再把 cafes 丟進來）
+$cafes          = ensure_array(pick($input, ['cafes'], []));
 
-// 若需要在後端自行取候選（可選）：
-// include __DIR__ . '/search_mode.php'; // 依需求自行帶入 $_GET/$_POST 再取回 $cafes
+// 重新計算支援：只用這些店 / 排除這些店
+$include_only   = ensure_array(pick($input, ['include_only', 'includeOnly'], [])); // [name, ...]
+$exclude        = ensure_array(pick($input, ['exclude'], []));                      // [name, ...]
+
+// 如果前端沒提供候選，也可在這裡 include 搜尋（自選）：
+// include __DIR__ . '/search_mode.php';
 
 // 時段設定
 $timeSettings = [
@@ -191,28 +170,38 @@ $timeSettings = [
 $startTime = $start_time ?: ($timeSettings[$time_pref]['start'] ?? '10:00');
 $endTime   = $timeSettings[$time_pref]['end']   ?? '20:00';
 
-// ============================ 候選清單預處理（偏好 / 距離） ============================
+// ============================ 候選清單預處理（include/exclude / 偏好 / 距離） ============================
+if (!empty($include_only)) {
+    $set = array_flip($include_only);
+    $cafes = array_values(array_filter($cafes, fn($c)=> isset($set[$c['name'] ?? ''])));
+}
+if (!empty($exclude)) {
+    $ban = array_flip($exclude);
+    $cafes = array_values(array_filter($cafes, fn($c)=> !isset($ban[$c['name'] ?? ''])));
+}
+
 $cafes = filter_cafes_by_preferences($cafes, $preferences);
+
 if ($user_lat !== null && $user_lng !== null) {
     $cafes = sort_cafes_by_distance($cafes, $user_lat, $user_lng);
 }
 
 if (empty($cafes)) {
-    // 沒有候選，直接回應（避免 LLM 亂造咖啡廳）
     echo json_encode([
         'reason'     => '沒有符合條件的咖啡廳，請調整地址/捷運或偏好條件後再試。',
         'story'      => '今天也可以先隨意走走，等遇見喜歡的咖啡香再坐下來。',
         'mood'       => $mood,
         'weather'    => $weather,
         'itinerary'  => [],
-        'candidates' => []
+        'candidates' => [],
+        'date'       => $date,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
 
 $cafeIndex = index_cafes_by_name($cafes);
 
-// ============================ 準備 LLM Prompt ============================
+// ============================ 準備 LLM Prompt（不一定要開） ============================
 $cafe_list_text = '';
 foreach ($cafes as $cafe) {
     $features = [];
@@ -235,8 +224,6 @@ $pref_map = [
     'minimum_charge' => '無低消',
     'outdoor_seating' => '戶外座位',
     'pet_friendly' => '寵物友善',
-    'wifi' => '有WiFi',
-    'quiet' => '安靜',
 ];
 $pref_texts = [];
 foreach ($preferences as $p) if (isset($pref_map[$p])) $pref_texts[] = $pref_map[$p];
@@ -273,8 +260,9 @@ $prompt = <<<PROMPT
 你是專業旅遊行程規劃師。請規劃一日行程，需同時考量「心情」「天氣」「使用者風格」「旅遊目的」「時間偏好」，並最小化來回移動。
 
 條件：
+- 日期：{$date}
 - 規劃地點：{$search_info}
-- 心情：{$mood}（對應：LOW/RELAX → 安靜/療癒；HAPPY → 活力/體驗；ROMANTIC → 氛圍/景觀）
+- 心情：{$mood}（LOW/RELAX → 安靜/療癒；HAPPY → 活力/體驗；ROMANTIC → 氛圍/景觀）
 - 天氣：{$weather}（RAINY/HUMID/COLD → 優先室內；SUNNY/HOT/WINDY → 優先戶外或通風良好）
 - 使用者風格：{$style_pref}
 - 時間偏好：{$time_pref}（{$startTime} - {$endTime}）
@@ -284,9 +272,9 @@ $prompt = <<<PROMPT
 
 硬性規則：
 1) **咖啡廳**：上午至少 1 間、下午至少 1 間，且名稱必須精確取自候選清單。
-2) **非咖啡廳**：至少安排 2 個時段（category = attraction 或 free_activity），需符合心情/天氣/風格/目的。
+2) **非咖啡廳**：至少安排 2 個時段（category = attraction 或 free_activity）。
 3) 依時間窗格由早到晚排序，盡量避免折返；中午正熱（SUNNY/HOT）避免曝曬戶外。
-4) 每個項目都要填寫 time/place/activity/transport/period/category，並加入 1 句簡短的 desc（如果合適）。
+4) 每個項目都要填寫 time/place/activity/transport/period/category，並加入 1 句簡短的 desc。
 5) 回覆只輸出 JSON，**不要**任何多餘文字或註解或 markdown。
 
 {$schema_hint}
@@ -339,7 +327,6 @@ function parse_llm_json($raw) {
 
 // ============================ Fallback 行程 ============================
 function fallback_itinerary($cafes, $time_pref, $mood, $weather) {
-    // 時間槽
     $slots_std    = ['10:00','11:30','13:30','15:30','17:30'];
     $slots_early  = ['09:00','11:00','13:00','15:00','17:00'];
     $slots_late   = ['13:00','14:30','16:30','18:30','20:00'];
@@ -347,7 +334,6 @@ function fallback_itinerary($cafes, $time_pref, $mood, $weather) {
     if ($time_pref === '早鳥') $slots = $slots_early;
     if ($time_pref === '夜貓') $slots = $slots_late;
 
-    // 簡單室內/戶外偏好
     $preferIndoor = in_array($weather, ['RAINY','HUMID','COLD','UNKNOWN'], true);
 
     $it = [];
@@ -429,10 +415,11 @@ if (!$llm_json) {
 // 把咖啡廳欄位補進 itinerary（命中候選名時）
 $llm_json['itinerary'] = enrich_itinerary_with_cafe_fields($llm_json['itinerary'] ?? [], $cafeIndex);
 
-// 補足 banner 欄位
+// 補欄位：故事 / 心情 / 天氣 / 日期
 if (empty($llm_json['story']))    $llm_json['story']   = '今天就從一杯咖啡開始，保持彈性，跟著天氣與心情走。';
 if (empty($llm_json['mood']))     $llm_json['mood']    = $mood;
 if (empty($llm_json['weather']))  $llm_json['weather'] = $weather;
+$llm_json['date'] = $date;
 
 // 候選清單（3~5 間）
 $llm_json['candidates'] = to_candidates($cafes, 5);
