@@ -1,81 +1,77 @@
 <?php
+// ============================ CORS / Error ============================
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit(0);
+
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-mb_internal_encoding('UTF-8');
-
-function norm_city($city) {
-    if (!$city) return null;
-    $c = trim(mb_strtolower($city));
-    // 前端可能丟 taipei/xinbei/中文，這裡一律對應回中文城市
-    if ($c === 'taipei' || $c === '臺北市' || $c === '台北市') return '台北市';
-    if ($c === 'xinbei' || $c === '新北市') return '新北市';
-    // 其他城市就原樣回傳（例如你未來擴張）
-    return $city;
+// ============================ 讀參數（同時支援 GET / POST / JSON） ============================
+function read_json_input() {
+    $raw = file_get_contents('php://input');
+    if ($raw === false || $raw === '') return [];
+    $j = json_decode($raw, true);
+    return is_array($j) ? $j : [];
 }
-function mb_contains($haystack, $needle) {
-    if ($needle === null || $needle === '') return true;
-    return mb_stripos($haystack ?? '', $needle) !== false;
-}
+$in = read_json_input();
 
-$searchMode = $_POST['search_mode'] ?? $_GET['search_mode'] ?? 'address';
-$city       = norm_city($_POST['city'] ?? $_GET['city'] ?? null);
-$district   = $_POST['district'] ?? $_GET['district'] ?? null;
-$road       = $_POST['road'] ?? $_GET['road'] ?? null;
-$mrt        = $_POST['mrt'] ?? $_GET['mrt'] ?? null;
+$searchMode = $_POST['search_mode'] ?? $_GET['search_mode'] ?? ($in['search_mode'] ?? $in['searchMode'] ?? 'address');
+$city       = $_POST['city']        ?? $_GET['city']        ?? ($in['city'] ?? null);
+$district   = $_POST['district']    ?? $_GET['district']    ?? ($in['district'] ?? null);
+$road       = $_POST['road']        ?? $_GET['road']        ?? ($in['road'] ?? null);
+$mrt        = $_POST['mrt']         ?? $_GET['mrt']         ?? ($in['mrt'] ?? null);
 
-// 只保留：socket/no_time_limit/minimum_charge/outdoor_seating/pet_friendly
-$preferences = $_POST['preferences'] ?? $_GET['preferences'] ?? [];
+$preferences = $_POST['preferences'] ?? $_GET['preferences'] ?? ($in['preferences'] ?? []);
 if (is_string($preferences)) {
-    $preferences = array_filter(array_map('trim', explode(',', $preferences)));
+    $tmp = json_decode($preferences, true);
+    if (is_array($tmp)) $preferences = $tmp;
+    else $preferences = array_values(array_filter(array_map('trim', explode(',', $preferences)), 'strlen'));
 }
+if (!is_array($preferences)) $preferences = [];
 
+// ============================ 讀資料 ============================
 $jsonFile = __DIR__ . '/cafes.json';
 $cafes = [];
 if (file_exists($jsonFile)) {
-    $cafes = json_decode(file_get_contents($jsonFile), true) ?: [];
+    $jsonData = file_get_contents($jsonFile);
+    $cafes = json_decode($jsonData, true);
+    if (!is_array($cafes)) $cafes = [];
 }
 
-$cafes = array_values(array_filter($cafes, function($cafe) use ($searchMode,$city,$district,$road,$mrt,$preferences){
-    // 城市（容錯：若 cafe 沒 city 欄就放過）
+// ============================ 過濾 ============================
+$cafes = array_filter($cafes, function($cafe) use ($searchMode, $city, $district, $road, $mrt, $preferences) {
+    // 城市
     if ($city && isset($cafe['city']) && $cafe['city'] !== $city) return false;
 
+    // 以地址搜尋
     if ($searchMode === 'address') {
-        if ($district && !mb_contains($cafe['address'] ?? '', $district)) return false;
-        if ($road && !mb_contains($cafe['address'] ?? '', $road)) return false;
-    } else { // mrt
-        if ($mrt && !mb_contains($cafe['mrt'] ?? '', $mrt)) return false;
+        if ($district && (!isset($cafe['address']) || stripos($cafe['address'], $district) === false)) return false;
+        if ($road && (!isset($cafe['address']) || stripos($cafe['address'], $road) === false)) return false;
     }
 
-    // 偏好（用你的 DB 規則：1=有/是、0=無/不限）
+    // 以捷運搜尋
+    if ($searchMode === 'mrt') {
+        if ($mrt && (!isset($cafe['mrt']) || stripos($cafe['mrt'], $mrt) === false)) return false;
+    }
+
+    // 偏好（保留：socket、no_time_limit、minimum_charge、outdoor_seating、pet_friendly）
     foreach ($preferences as $pref) {
-        switch ($pref) {
-            case 'socket':
-                if (($cafe['socket'] ?? '0') !== "1") return false; break;
-            case 'no_time_limit':
-                if (($cafe['limited_time'] ?? '1') !== "0") return false; break;
-            case 'minimum_charge':
-                // 你說的是「有低消=1、無低消=0」，而 chips 是「無低消」
-                if (($cafe['minimum_charge'] ?? '1') !== "0") return false; break;
-            case 'outdoor_seating':
-                if (($cafe['outdoor_seating'] ?? '0') !== "1") return false; break;
-            case 'pet_friendly':
-                if (($cafe['pet_friendly'] ?? '0') !== "1") return false; break;
-            default:
-                // 忽略未支援的鍵
-                break;
-        }
+        $pref = trim($pref);
+        if ($pref === 'socket'           && (($cafe['socket'] ?? '') !== "1")) return false;
+        if ($pref === 'no_time_limit'    && (($cafe['limited_time'] ?? '') !== "0")) return false;        // 不限時
+        if ($pref === 'minimum_charge'   && (($cafe['minimum_charge'] ?? '') !== "0")) return false;      // 無低消
+        if ($pref === 'outdoor_seating'  && (($cafe['outdoor_seating'] ?? '') !== "1")) return false;
+        if ($pref === 'pet_friendly'     && (($cafe['pet_friendly'] ?? '') !== "1")) return false;
     }
-    return true;
-}));
 
-if (basename($_SERVER['PHP_SELF']) === 'search_mode.php') {
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['cafes' => $cafes], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-return $cafes;
+    return true;
+});
+
+// 重新索引
+$cafes = array_values($cafes);
+
+// ============================ 回傳 JSON ============================
+header('Content-Type: application/json; charset=utf-8');
+echo json_encode(['cafes' => $cafes], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
