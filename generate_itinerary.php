@@ -76,6 +76,13 @@ function filter_cafes_open_by_start_strict($cafes, $startHHmm) {
     }
     return $out;
 }
+function period_from_hhmm($hhmm) {
+    $m = hhmm_to_minutes($hhmm);
+    if ($m === null) return 'morning';
+    if ($m < 720) return 'morning';        // < 12:00
+    if ($m < 1080) return 'afternoon';     // < 18:00
+    return 'evening';
+}
 
 // ============================ 偏好過濾（此檔改為「可選」：search_mode 已經先過濾） ============================
 function filter_cafes_by_preferences($cafes, $preferences) {
@@ -384,8 +391,9 @@ function fallback_itinerary($cafes, $cafes_open_first, $time_pref, $mood, $weath
     if ($time_pref === '夜貓') $slots = $slots_late;
 
     $preferIndoor = in_array($weather, ['RAINY','HUMID','COLD','UNKNOWN'], true);
+    $firstPeriod  = period_from_hhmm($startTime);
 
-    // 第一筆：先用「第一時段可用咖啡廳」；若沒有就放具名景點（通用）
+    // 第一筆：優先「第一時段可用咖啡廳」；否則具名景點
     $cafe1 = $cafes_open_first[0] ?? null;
     $it = [];
     if ($cafe1) {
@@ -394,7 +402,7 @@ function fallback_itinerary($cafes, $cafes_open_first, $time_pref, $mood, $weath
             'place' => $cafe1['name'],
             'activity' => '享用咖啡與輕食，溫柔開場',
             'transport' => '步行',
-            'period' => 'morning',
+            'period' => $firstPeriod,
             'category' => 'cafe',
             'desc' => ($mood === 'LOW' || $mood === 'RELAX') ? '挑個安靜角落，讓心慢慢沉澱。' : '坐在窗邊，吸收晨間的活力。'
         ];
@@ -402,9 +410,9 @@ function fallback_itinerary($cafes, $cafes_open_first, $time_pref, $mood, $weath
         $it[] = [
             'time' => $startTime,
             'place' => $preferIndoor ? '附近書店/展場' : '附近公園/市場',
-            'activity' => $preferIndoor ? '逛逛書店或展覽，雨天也愜意' : '清晨散步，感受城市甦醒',
+            'activity' => $preferIndoor ? '逛逛書店或展覽，雨天也愜意' : '散步醒腦，感受城市甦醒',
             'transport' => '步行',
-            'period' => 'morning',
+            'period' => $firstPeriod,
             'category' => 'attraction',
             'desc' => $preferIndoor ? '室內行程，風雨無阻。' : '清新空氣喚醒一天。'
         ];
@@ -417,7 +425,7 @@ function fallback_itinerary($cafes, $cafes_open_first, $time_pref, $mood, $weath
         'place' => $preferIndoor ? '書店 / 展覽' : '公園 / 老街散步',
         'activity' => $preferIndoor ? '看展或翻翻新書' : '在綠意或街景間拍照',
         'transport' => '步行或大眾運輸',
-        'period' => 'morning',
+        'period' => period_from_hhmm($slots[1]),
         'category' => 'attraction',
         'desc' => $preferIndoor ? '換個空間轉換心情。' : '把步調放慢，留點空白。'
     ];
@@ -427,7 +435,7 @@ function fallback_itinerary($cafes, $cafes_open_first, $time_pref, $mood, $weath
             'place' => $secondCafe['name'],
             'activity' => '午後咖啡與甜點，補充能量',
             'transport' => '步行',
-            'period' => 'afternoon',
+            'period' => period_from_hhmm($slots[2]),
             'category' => 'cafe',
             'desc' => '午後光影最適合一份甜點。'
         ];
@@ -437,7 +445,7 @@ function fallback_itinerary($cafes, $cafes_open_first, $time_pref, $mood, $weath
         'place' => $preferIndoor ? '美術館 / 商場' : '河濱 / 步道',
         'activity' => $preferIndoor ? '逛逛展區或窗逛放空' : '沿著水岸或樹蔭慢行',
         'transport' => '步行或大眾運輸',
-        'period' => 'afternoon',
+        'period' => period_from_hhmm($slots[3]),
         'category' => 'attraction',
         'desc' => $preferIndoor ? '遇雨也能優雅漫遊。' : '傍晚風起，最舒服的時刻。'
     ];
@@ -446,7 +454,7 @@ function fallback_itinerary($cafes, $cafes_open_first, $time_pref, $mood, $weath
         'place' => '自由活動',
         'activity' => '找家喜歡的小店作結',
         'transport' => '步行',
-        'period' => 'evening',
+        'period' => period_from_hhmm($slots[4]),
         'category' => 'free_activity',
         'desc' => '用輕鬆的步調收尾今天。'
     ];
@@ -477,66 +485,61 @@ function time_to_minutes_or_default($t, $def = '12:00') {
     $m = hhmm_to_minutes($t);
     return $m === null ? hhmm_to_minutes($def) : $m;
 }
-function snap_first_morning_to_start(array $it, string $time_pref): array {
-    $start = ['標準'=>'10:00','早鳥'=>'09:00','夜貓'=>'13:00'][$time_pref] ?? '10:00';
-    $startMin = hhmm_to_minutes($start);
-    // 找最早的「morning」項目
-    $idx = null; $best = PHP_INT_MAX;
-    foreach ($it as $i => $item) {
-        if (strtolower($item['period'] ?? '') === 'morning') {
-            $t = time_to_minutes_or_default($item['time'] ?? '12:00');
-            if ($t < $best) { $best = $t; $idx = $i; }
-        }
-    }
-    if ($idx !== null) $it[$idx]['time'] = $start;
+/** 將整份行程的「最早一筆」時間對齊到 $startTime，並矯正所有早於起始的項目 */
+function snap_first_to_start(array $it, string $startTime): array {
+    $startMin = hhmm_to_minutes($startTime);
+    if ($startMin === null) return $it;
 
-    // 若有更早於起始的時間，夾到起始
+    $firstIdx = null; $best = PHP_INT_MAX;
     foreach ($it as $i => $item) {
-        $t = time_to_minutes_or_default($item['time'] ?? '12:00');
-        if ($t < $startMin) $it[$i]['time'] = $start;
+        $t = time_to_minutes_or_default($item['time'] ?? $startTime, $startTime);
+        if ($t < $best) { $best = $t; $firstIdx = $i; }
+        if ($t < $startMin) $it[$i]['time'] = $startTime; // 不能早於起始
     }
-    usort($it, fn($a,$b)=> time_to_minutes_or_default($a['time'] ?? '12:00') <=> time_to_minutes_or_default($b['time'] ?? '12:00'));
+    if ($firstIdx !== null) $it[$firstIdx]['time'] = $startTime;
+
+    usort($it, fn($a,$b)=> time_to_minutes_or_default($a['time'] ?? $startTime, $startTime)
+                        <=> time_to_minutes_or_default($b['time'] ?? $startTime, $startTime));
     return $it;
 }
 function ensure_first_slot_if_cafe_open(array $plan, array $cafes_open_first, string $time_pref, string $startTime): array {
     $it = $plan['itinerary'] ?? [];
     if (!is_array($it) || empty($it)) return $plan;
 
-    // 取得第一個 morning 項目
+    // 找最早的一筆
     $firstIdx = null; $firstT = PHP_INT_MAX;
     foreach ($it as $i => $item) {
-        if (strtolower($item['period'] ?? '') === 'morning') {
-            $t = time_to_minutes_or_default($item['time'] ?? $startTime);
-            if ($t < $firstT) { $firstT = $t; $firstIdx = $i; }
-        }
+        $t = time_to_minutes_or_default($item['time'] ?? $startTime);
+        if ($t < $firstT) { $firstT = $t; $firstIdx = $i; }
     }
     if ($firstIdx === null) return $plan;
 
-    // 對齊時間
+    // 對齊時間 & period
+    $firstPeriod = period_from_hhmm($startTime);
     $it[$firstIdx]['time'] = $startTime;
 
-    // 若是 cafe：必須從「第一時段可用咖啡廳」挑
     if (strtolower($it[$firstIdx]['category'] ?? '') === 'cafe') {
         $okNames = array_flip(array_map(fn($c)=>$c['name'] ?? '', $cafes_open_first));
         $cur = $it[$firstIdx]['place'] ?? '';
         if (!$cur || !isset($okNames[$cur])) {
-            // 換成第一個可用的
             foreach ($cafes_open_first as $c) {
-                if (!empty($c['name'])) {
-                    $it[$firstIdx]['place'] = $c['name'];
-                    break;
-                }
+                if (!empty($c['name'])) { $it[$firstIdx]['place'] = $c['name']; break; }
             }
         }
-        // 如果連可用清單都沒有，改成具名 attraction（保底）
         if (empty($it[$firstIdx]['place'])) {
+            // 可用清單為空 → 改成具名 attraction
             $it[$firstIdx]['category'] = 'attraction';
             $it[$firstIdx]['place'] = '附近書店/展覽或公園';
-            $it[$firstIdx]['activity'] = '清晨散步或看書展';
+            $it[$firstIdx]['activity'] = '走走看看或看展，輕鬆開場';
             $it[$firstIdx]['transport'] = '步行';
             $it[$firstIdx]['desc'] = '以輕鬆步調展開今天。';
         }
+        $it[$firstIdx]['period'] = $firstPeriod;
+    } else {
+        // 非咖啡廳也同步 period
+        $it[$firstIdx]['period'] = $firstPeriod;
     }
+
     $plan['itinerary'] = $it;
     return $plan;
 }
@@ -574,12 +577,13 @@ function ensure_am_pm_cafes($plan, $must_include, $cafes_open_first, $cafes_all,
         if ($name === null) foreach ($must_include as $n) { if (isset($idxAll[$n]) && empty($used[$n])) { $name = $n; break; } }
         if ($name === null) foreach ($idxAll as $n => $_) { if (empty($used[$n])) { $name = $n; break; } }
         if ($name !== null) {
+            $timeStr = $slots[0];
             $it[] = [
-                'time' => $slots[0],
+                'time' => $timeStr,
                 'place' => $name,
                 'activity' => '晨間咖啡',
                 'transport' => '步行',
-                'period' => 'morning',
+                'period' => period_from_hhmm($timeStr),
                 'category' => 'cafe',
                 'desc' => '從香氣開始。'
             ];
@@ -593,12 +597,13 @@ function ensure_am_pm_cafes($plan, $must_include, $cafes_open_first, $cafes_all,
         foreach ($must_include as $n) { if (isset($idxAll[$n]) && empty($used[$n])) { $name = $n; break; } }
         if ($name === null) foreach ($idxAll as $n => $_) { if (empty($used[$n])) { $name = $n; break; } }
         if ($name !== null) {
+            $timeStr = $slots[2];
             $it[] = [
-                'time' => $slots[2],
+                'time' => $timeStr,
                 'place' => $name,
                 'activity' => '午後咖啡與甜點',
                 'transport' => '步行',
-                'period' => 'afternoon',
+                'period' => period_from_hhmm($timeStr),
                 'category' => 'cafe',
                 'desc' => '午後時光慢下來。'
             ];
@@ -612,11 +617,11 @@ function ensure_am_pm_cafes($plan, $must_include, $cafes_open_first, $cafes_all,
     return $plan;
 }
 
-// 對齊起始時間
-$llm_json['itinerary'] = snap_first_morning_to_start($llm_json['itinerary'] ?? [], $time_pref);
-// 第一筆若是咖啡廳，必須用早開清單
+// 對齊起始時間（整份行程最早一筆）
+$llm_json['itinerary'] = snap_first_to_start($llm_json['itinerary'] ?? [], $startTime);
+// 第一筆若是咖啡廳，必須用早開清單；period 同步
 $llm_json = ensure_first_slot_if_cafe_open($llm_json, $cafes_open_first, $time_pref, $startTime);
-// AM/PM 各一間咖啡
+// AM/PM 各一間咖啡（period 依時間計算）
 $llm_json = ensure_am_pm_cafes($llm_json, $must_include, $cafes_open_first, $cafes, $time_pref);
 
 // 補欄位/候選
