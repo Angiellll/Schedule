@@ -4,11 +4,11 @@ header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit(0);
-
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
+header('Content-Type: application/json; charset=utf-8');
 
-// ============================ 讀參數（GET / POST / JSON） ============================
+// ============================ 讀參數 ============================
 function read_json_input() {
     $raw = file_get_contents('php://input');
     if ($raw === false || $raw === '') return [];
@@ -22,11 +22,9 @@ $city       = $_POST['city']        ?? $_GET['city']        ?? ($in['city'] ?? n
 $district   = $_POST['district']    ?? $_GET['district']    ?? ($in['district'] ?? null);
 $road       = $_POST['road']        ?? $_GET['road']        ?? ($in['road'] ?? null);
 $mrt        = $_POST['mrt']         ?? $_GET['mrt']         ?? ($in['mrt'] ?? null);
-
-// 可選：日期（原樣回傳，前端顯示或後續串天氣用）
 $date       = $_POST['date']        ?? $_GET['date']        ?? ($in['date'] ?? null);
 
-// 偏好（支援陣列、逗號字串、JSON字串）
+// 偏好（支援陣列 / 逗號字串 / JSON）
 $preferences = $_POST['preferences'] ?? $_GET['preferences'] ?? ($in['preferences'] ?? []);
 if (is_string($preferences)) {
     $tmp = json_decode($preferences, true);
@@ -35,13 +33,14 @@ if (is_string($preferences)) {
 }
 if (!is_array($preferences)) $preferences = [];
 
-// ============================ 正規化/比對工具 ============================
-function norm_city($c) {
-    if (!is_string($c) || $c === '') return $c;
-    $lc = strtolower(trim($c));
-    if (in_array($lc, ['taipei','taipei city'])) return '台北市';
-    if (in_array($lc, ['xinbei','newtaipei','new_taipei','new taipei','new taipei city'])) return '新北市';
-    return $c;
+// ============================ 正規化工具 ============================
+function norm_city_in($c) {
+    if (!is_string($c) || $c === '') return null;
+    $lc = mb_strtolower(trim($c));
+    // 統一成資料庫用的小寫拼音
+    if (in_array($lc, ['台北市','臺北市','taipei','taipei city'])) return 'taipei';
+    if (in_array($lc, ['新北市','newtaipei','new taipei','new taipei city','xinbei'])) return 'xinbei';
+    return $lc;
 }
 function is_no_time_limit($v) {
     if ($v === null) return true;
@@ -54,44 +53,24 @@ function is_no_min_charge($v) {
     if ($s === '' || $s === '0') return true;
     return (mb_strpos($s, '無') !== false);
 }
-
-// ---- 捷運站名規範化與精確比對 ----
-function mrt_normalize($s) {
-    $s = (string)$s;
-    // 移除空白（含全形）、"捷運"、括號內容
-    $s = preg_replace('/\s+/u', '', $s);
-    $s = str_replace(['　','捷運'], ['', ''], $s);
+function norm_mrt($s) {
+    if (!is_string($s)) return '';
+    // 去掉括號內容
     $s = preg_replace('/（.*?）|\(.*?\)/u', '', $s);
-    // 臺/台一致、去掉尾端「站」
-    $s = str_replace('臺', '台', $s);
-    $s = rtrim($s, "站");
-    return $s;
-}
-/** 把一個欄位的捷運資訊拆成陣列（逗號/斜線/豎線/頓號/空白皆可） */
-function mrt_field_to_list($mrtField) {
-    if (is_array($mrtField)) {
-        $s = implode(',', array_map('strval', $mrtField));
-    } else {
-        $s = (string)$mrtField;
-    }
-    $s = str_replace(['｜','|','、',';','；'], ',', $s);
-    $parts = array_filter(array_map('trim', preg_split('/[,\s\/]+/u', $s)), 'strlen');
-    return array_values($parts);
-}
-/** 精確站名命中：只接受「中山 / 中山站」=「中山」，不會吃到「中山國小」等 */
-function mrt_exact_match($mrtField, $queryMrt) {
-    if ($queryMrt === null || $queryMrt === '') return true; // 無查詢就不過濾
-    $q = mrt_normalize($queryMrt);
-    $list = mrt_field_to_list($mrtField);
-    foreach ($list as $raw) {
-        if (mrt_normalize($raw) === $q) return true;
-    }
-    return false;
+    // 去掉「7號出口」這類尾綴
+    $s = preg_replace('/\d+\s*號出口/u', '', $s);
+    $s = str_replace(['出口','號'], '', $s);
+    // 去常見字樣
+    $s = str_replace(['台北捷運','捷運','車站','站'], '', $s);
+    // 去分隔與空白
+    $s = preg_replace('/\s|　|\/|｜|\||、|，|,|;|-|‧|·/u', '', $s);
+    return mb_strtolower(trim($s));
 }
 
-$city = norm_city($city);
+$cityNorm = norm_city_in($city);
+$mrtNormQ = norm_mrt($mrt);
 
-// ============================ 讀資料（cafes.json） ============================
+// ============================ 讀資料 ============================
 $jsonFile = __DIR__ . '/cafes.json';
 $cafes = [];
 if (file_exists($jsonFile)) {
@@ -101,22 +80,22 @@ if (file_exists($jsonFile)) {
 }
 
 // ============================ 過濾 ============================
-$cafes = array_filter($cafes, function($cafe) use ($searchMode, $city, $district, $road, $mrt, $preferences) {
-    // --- 城市比對（寬鬆）---
-    if ($city) {
-        $cafeCity = isset($cafe['city']) ? $cafe['city'] : null;
-        $ncafeCity = norm_city($cafeCity);
+$cafes = array_values(array_filter($cafes, function($cafe) use ($searchMode, $cityNorm, $district, $road, $mrtNormQ, $preferences) {
+    // 城市（用欄位 city 比對；若無再退回 address 包含）
+    if ($cityNorm) {
+        $cc = isset($cafe['city']) ? mb_strtolower($cafe['city']) : null;
         $okCity = true;
-        if ($ncafeCity) {
-            $okCity = ($ncafeCity === $city);
-        } else {
+        if ($cc) $okCity = ($cc === $cityNorm);
+        else {
             $addr = $cafe['address'] ?? '';
-            $okCity = ($addr && mb_strpos($addr, $city) !== false);
+            $okCity = $addr && (
+                ($cityNorm === 'taipei' && (mb_strpos($addr, '台北市') !== false || mb_strpos($addr, '臺北市') !== false)) ||
+                ($cityNorm === 'xinbei' && (mb_strpos($addr, '新北市') !== false))
+            );
         }
         if (!$okCity) return false;
     }
 
-    // --- 地址模式 ---
     if ($searchMode === 'address') {
         if ($district) {
             $addr = $cafe['address'] ?? '';
@@ -126,14 +105,15 @@ $cafes = array_filter($cafes, function($cafe) use ($searchMode, $city, $district
             $addr = $cafe['address'] ?? '';
             if ($addr === '' || stripos($addr, $road) === false) return false;
         }
+    } else { // mrt 模式（嚴格比對，不降級）
+        if (!$mrtNormQ) return false;
+        $cv = $cafe['mrt'] ?? '';
+        if ($cv === '') return false;
+        $norm = norm_mrt($cv);
+        if ($norm === '' || $norm !== $mrtNormQ) return false; // **等值比對**
     }
 
-    // --- 捷運模式（精確比對） ---
-    if ($searchMode === 'mrt') {
-        if (!mrt_exact_match($cafe['mrt'] ?? '', (string)$mrt)) return false;
-    }
-
-    // --- 偏好（僅保留以下 key）---
+    // 偏好
     foreach ($preferences as $pref) {
         $pref = trim($pref);
         if ($pref === 'socket') {
@@ -147,18 +127,19 @@ $cafes = array_filter($cafes, function($cafe) use ($searchMode, $city, $district
         } elseif ($pref === 'pet_friendly') {
             if (($cafe['pet_friendly'] ?? '') !== "1") return false;
         }
-        // 其餘（wifi/quiet）本版本不過濾
     }
-
     return true;
-});
+}));
 
-// 重新索引
-$cafes = array_values($cafes);
-
-// ============================ 回傳 ============================
-header('Content-Type: application/json; charset=utf-8');
 echo json_encode([
     'cafes' => $cafes,
-    'date'  => $date, // 回傳給前端帶去 generate_itinerary.php 或顯示
+    'date'  => $date,
+    'debug' => [
+        'search_mode' => $searchMode,
+        'city_norm'   => $cityNorm,
+        'mrt_query'   => $mrt,
+        'mrt_norm'    => $mrtNormQ,
+        'count'       => count($cafes),
+        'strict_mrt'  => true,   // 一律嚴格，不做降級
+    ]
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
