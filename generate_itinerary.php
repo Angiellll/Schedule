@@ -35,7 +35,7 @@ $mood          = pick($in,['mood'],'RELAX');
 $weather       = pick($in,['weather'],'UNKNOWN');
 $start_time_in = pick($in,['start_time','startTime'],null);
 $duration_hrs  = (int)pick($in,['duration_hours','durationHours'],8);
-$cafes         = ensure_array(pick($in,['cafes'],[]));     // ← 直接吃 search_mode 結果（可能為空）
+$cafes         = ensure_array(pick($in,['cafes'],[]));     // 搜尋結果（可能為空）
 $include_only  = ensure_array(pick($in,['include_only','includeOnly'],[]));
 $exclude       = ensure_array(pick($in,['exclude'],[]));
 $must_include  = ensure_array(pick($in,['must_include','mustInclude'],[]));
@@ -185,7 +185,9 @@ $llm_json = null;
 if ($apiKey) $llm_json = parse_llm_json(call_openai_chat($apiKey,$prompt));
 if (!$llm_json) $llm_json = fallback_itinerary($cafes,$cafes_open_first,$time_pref,$mood,$weather,$startTime);
 
-// 對齊第一筆時間、必要時替換成可開門咖啡或景點
+// ---------- 行程後處理（只動這裡） ----------
+
+// A) 第一站對齊起始時間，且若你有勾選的店在「第一時段可開門」清單，優先用它
 function snap_first_morning_to_start($it,$time_pref){
   $start=['標準'=>'10:00','早鳥'=>'09:00','夜貓'=>'13:00'][$time_pref] ?? '10:00';
   $startMin=hhmm_to_minutes($start);
@@ -196,46 +198,120 @@ function snap_first_morning_to_start($it,$time_pref){
   usort($it, fn($a,$b)=>time_to_minutes_or_default($a['time']??'12:00') <=> time_to_minutes_or_default($b['time']??'12:00'));
   return $it;
 }
-function ensure_first_slot_if_cafe_open($plan,$cafes_open_first,$startTime,$search_info){
+
+function ensure_first_slot_if_cafe_open($plan,$cafes_open_first,$startTime,$search_info,$must_include=[]){
   $it=$plan['itinerary']??[]; if(!is_array($it)||empty($it)) return $plan;
+
+  // 找第一個 morning 項目
   $firstIdx=null; $firstT=PHP_INT_MAX;
   foreach($it as $i=>$item){ if(strtolower($item['period']??'')==='morning'){ $t=time_to_minutes_or_default($item['time']??$startTime); if($t<$firstT){$firstT=$t;$firstIdx=$i;} } }
   if($firstIdx===null) return $plan;
+
   $it[$firstIdx]['time']=$startTime;
+
+  $openNames = array_flip(array_map(fn($c)=>$c['name']??'', $cafes_open_first));
+  $mustOpen  = array_values(array_filter($must_include, fn($n)=>isset($openNames[$n])));
+
+  // 若第一站是 cafe，盡量使用「你勾的、而且有開門」的店
   if(strtolower($it[$firstIdx]['category']??'')==='cafe'){
-    $ok=array_flip(array_map(fn($c)=>$c['name']??'', $cafes_open_first));
     $cur=$it[$firstIdx]['place']??'';
-    if(!$cur || !isset($ok[$cur])){
-      if(!empty($cafes_open_first)){
+    if(!isset($openNames[$cur])){
+      if(!empty($mustOpen)){
+        $it[$firstIdx]['place']=$mustOpen[0];
+      } elseif(!empty($cafes_open_first)) {
         $it[$firstIdx]['place']=$cafes_open_first[0]['name'];
-      }else{
+      } else {
+        // 找不到可開門的咖啡廳 → 改成附近景點
         $it[$firstIdx]=['time'=>$startTime,'place'=>'附近書店/展覽或公園','activity'=>'清晨散步或看書展','transport'=>'步行','period'=>'morning','category'=>'attraction','desc'=>'以輕鬆步調展開今天。'];
       }
     }
+  } else {
+    // 第一站不是 cafe：如果你有勾、而且可開門，仍保持非咖啡也可以；不強行改類型
+    // （若要強制變咖啡，這裡可改寫，但目前依你的需求不動其他邏輯）
   }
-  $plan['itinerary']=$it; return $plan;
-}
-function ensure_am_pm_cafes($plan,$cafes_all,$time_pref){
-  // 若根本沒有咖啡廳候選，就不要硬補咖啡
-  if (empty($cafes_all)) return $plan;
-  $slots_std=['10:00','11:30','13:30','15:30','17:30'];
-  $slots_early=['09:00','11:00','13:00','15:00','17:00'];
-  $slots_late=['13:00','14:30','16:30','18:30','20:00'];
-  $slots=$slots_std; if($time_pref==='早鳥')$slots=$slots_early; if($time_pref==='夜貓')$slots=$slots_late;
-  $amCut=hhmm_to_minutes('12:00'); $it=$plan['itinerary']??[]; if(!is_array($it))$it=[];
-  $used=[]; $hasAM=false; $hasPM=false;
-  foreach($it as $item){ if(strtolower($item['category']??'')==='cafe'){ $name=$item['place']??''; if($name)$used[$name]=true; $t=time_to_minutes_or_default($item['time']??'12:00'); if($t<$amCut)$hasAM=true; else $hasPM=true; } }
-  $idx=index_cafes_by_name($cafes_all);
-  if(!$hasAM){ foreach($idx as $n=>$_){ if(empty($used[$n])){ $it[]=['time'=>$slots[0],'place'=>$n,'activity'=>'晨間咖啡','transport'=>'步行','period'=>'morning','category'=>'cafe','desc'=>'從香氣開始。']; $used[$n]=true; break; } } }
-  if(!$hasPM){ foreach($idx as $n=>$_){ if(empty($used[$n])){ $it[]=['time'=>$slots[2],'place'=>$n,'activity'=>'午後咖啡與甜點','transport'=>'步行','period'=>'afternoon','category'=>'cafe','desc'=>'午後時光慢下來。']; $used[$n]=true; break; } } }
-  usort($it, fn($a,$b)=>time_to_minutes_or_default($a['time']??'12:00') <=> time_to_minutes_or_default($b['time']??'12:00'));
+
   $plan['itinerary']=$it; return $plan;
 }
 
-// 後處理
+// B) 上午/下午咖啡必備，並把你勾的 1~3 間優先塞進去（不重覆）
+function ensure_am_pm_cafes($plan, $cafes_all, $time_pref, $must_include = []) {
+  if (empty($cafes_all)) return $plan;
+
+  $slots_std  = ['10:00','11:30','13:30','15:30','17:30'];
+  $slots_early= ['09:00','11:00','13:00','15:00','17:00'];
+  $slots_late = ['13:00','14:30','16:30','18:30','20:00'];
+  $slots = $slots_std;
+  if ($time_pref==='早鳥') $slots=$slots_early;
+  if ($time_pref==='夜貓') $slots=$slots_late;
+
+  $amCut = hhmm_to_minutes('12:00');
+  $it = $plan['itinerary'] ?? [];
+  if (!is_array($it)) $it = [];
+
+  $used = []; $hasAM=false; $hasPM=false;
+  foreach ($it as $item) {
+    if (strtolower($item['category'] ?? '') === 'cafe') {
+      $name = $item['place'] ?? '';
+      if ($name) $used[$name] = true;
+      $t = time_to_minutes_or_default($item['time'] ?? '12:00');
+      if ($t < $amCut) $hasAM = true; else $hasPM = true;
+    }
+  }
+
+  $idx = index_cafes_by_name($cafes_all);
+  $must = array_values(array_filter($must_include, fn($n) => isset($idx[$n])));
+
+  $prefTimes = [$slots[0], $slots[2], $slots[3], $slots[1], $slots[4]];
+  $prefPeriod = function($t) use ($amCut) { return (hhmm_to_minutes($t) < $amCut) ? 'morning' : 'afternoon'; };
+
+  // 先安插必選
+  $ti = 0;
+  foreach ($must as $name) {
+    if (!empty($used[$name])) continue;
+    while ($ti < count($prefTimes)) {
+      $time = $prefTimes[$ti++];
+      $it[] = [
+        'time' => $time,
+        'place' => $name,
+        'activity' => ($prefPeriod($time)==='morning') ? '晨間咖啡' : '午後咖啡與甜點',
+        'transport' => '步行',
+        'period' => $prefPeriod($time),
+        'category' => 'cafe',
+        'desc' => '（必選）'
+      ];
+      $used[$name] = true;
+      if ($prefPeriod($time)==='morning') $hasAM = true; else $hasPM = true;
+      break;
+    }
+  }
+
+  // 再補「至少一間 AM / 一間 PM」
+  if (!$hasAM) {
+    foreach ($idx as $n => $_) {
+      if (empty($used[$n])) {
+        $it[] = ['time'=>$slots[0],'place'=>$n,'activity'=>'晨間咖啡','transport'=>'步行','period'=>'morning','category'=>'cafe','desc'=>'從香氣開始。'];
+        $used[$n] = true; $hasAM = true; break;
+      }
+    }
+  }
+  if (!$hasPM) {
+    foreach ($idx as $n => $_) {
+      if (empty($used[$n])) {
+        $it[] = ['time'=>$slots[2],'place'=>$n,'activity'=>'午後咖啡與甜點','transport'=>'步行','period'=>'afternoon','category'=>'cafe','desc'=>'午後時光慢下來。'];
+        $used[$n] = true; $hasPM = true; break;
+      }
+    }
+  }
+
+  usort($it, fn($a, $b) => time_to_minutes_or_default($a['time'] ?? '12:00') <=> time_to_minutes_or_default($b['time'] ?? '12:00'));
+  $plan['itinerary'] = $it;
+  return $plan;
+}
+
+// ---------- 呼叫順序（新增 must_include 參數） ----------
 $llm_json['itinerary'] = snap_first_morning_to_start($llm_json['itinerary'] ?? [], $time_pref);
-$llm_json = ensure_first_slot_if_cafe_open($llm_json, $cafes_open_first, $startTime, $search_info);
-$llm_json = ensure_am_pm_cafes($llm_json, $cafes, $time_pref);
+$llm_json = ensure_first_slot_if_cafe_open($llm_json, $cafes_open_first, $startTime, $search_info, $must_include);
+$llm_json = ensure_am_pm_cafes($llm_json, $cafes, $time_pref, $must_include);
 
 // 補欄位/候選
 $llm_json['itinerary'] = enrich_itinerary_with_cafe_fields($llm_json['itinerary'] ?? [], $cafeIndexAll);
