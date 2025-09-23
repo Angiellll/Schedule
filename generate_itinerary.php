@@ -37,6 +37,25 @@ function to_candidates($cafes,$limit=5,$selectedNames=[]){
 function filter_cafes_open_by_start_strict($cafes,$startHHmm){ $startMin=hhmm_to_minutes($startHHmm); if($startMin===null)return $cafes; $out=[]; foreach($cafes as $c){ $e=earliest_open_minutes_from_string($c['open_time']??($c['Open_time']??null)); if($e===null || $e <= $startMin) $out[]=$c; } return $out; }
 function time_to_minutes_or_default($t,$def='12:00'){ $m=hhmm_to_minutes($t); return $m===null?hhmm_to_minutes($def):$m; }
 
+// 新增：以 time 決定 period（不再相信 LLM 的 period）
+function fix_period_by_time($itinerary){
+  if(!is_array($itinerary)) return $itinerary;
+  foreach($itinerary as &$item){
+    $timeStr = $item['time'] ?? null;
+    $m = time_to_minutes_or_default($timeStr,'12:00'); // 取分鐘數（若無效則預設中午）
+    $hour = intval(floor($m / 60));
+    if ($hour >= 6 && $hour < 12) {
+      $item['period'] = 'morning';
+    } elseif ($hour >= 12 && $hour < 18) {
+      $item['period'] = 'afternoon';
+    } else {
+      $item['period'] = 'evening';
+    }
+  }
+  unset($item);
+  return $itinerary;
+}
+
 // 用來檢查 place 是否是通用詞
 function looks_like_generic_place($p){
   if(!$p) return true;
@@ -337,6 +356,9 @@ if($needRefine){
 }
 
 $llm_json = normalize_times_unique($llm_json);
+
+// **在此呼叫：以 time 修正 period（避免 LLM 回傳錯誤 period）**
+$llm_json['itinerary'] = fix_period_by_time($llm_json['itinerary'] ?? []);
 
 // 補欄位/候選 + 回傳
 $llm_json['itinerary'] = enrich_itinerary_with_cafe_fields($llm_json['itinerary'] ?? [], $cafeIndexAll);
