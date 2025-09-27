@@ -313,6 +313,7 @@ function refine_named_places_via_llm($key,$original,$search_info,$date){
   $repair = <<<TXT
 以下是目前的行程 JSON。請「就地修改 JSON」，遵守：
 - place 一律換成**具名地點**（真實存在的景點/書店/公園/夜市/博物館等），不要出現「附近/某/公園/老街/書店/展覽/自由活動」這種通用詞。
+- 所有地點必須位於 {$search_info} 附近（步行或捷運可到達，建議 1~2 公里範圍內）。
 - 保留每個 item 的 time / period / category / transport 結構；若時間相同可微調 ±30 分鐘避免撞時段。
 - 至少保有 2 個非咖啡項目（category=attraction 或 free_activity）。
 - 地點需合理位於或鄰近 {$search_info}，日期：{$date}。
